@@ -4,10 +4,10 @@
   </PropertyGroup>
   <!-- App dependencies -->
   <ItemGroup>
+    <PackageVersion Include="Akka.Streams" Version="1.5.1" />
   </ItemGroup>
   <!-- Test dependencies -->
   <ItemGroup>
-    <PackageVersion Include="Akka" Version="1.5.1" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="$(TestSdkVersion)" />
     <PackageVersion Include="xunit" Version="$(XunitVersion)" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="$(XunitRunnerVisualstudio)" />
