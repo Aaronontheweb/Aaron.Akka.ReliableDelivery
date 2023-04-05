@@ -1,6 +1,7 @@
 ﻿using System;
 using Akka.Actor;
 using SeqNo = System.Int64;
+
 namespace Aaron.Akka.ReliableDelivery
 {
     public static class ProducerController
@@ -17,71 +18,62 @@ namespace Aaron.Akka.ReliableDelivery
             /// over the network to the consumer. If null, we don't chunk or serialize large messages.
             /// </summary>
             public int? ChunkLargeMessageBytes { get; }
-        
+
             public Settings WithChunkLargeMessageBytes(int? chunkLargeMessageBytes)
             {
                 return new Settings(chunkLargeMessageBytes);
             }
         }
-        
+
         /// <summary>
         /// Marker interface to indicate that a message belongs to the reliable delivery domain.
         /// </summary>
-        public interface IProducerCommand : IDeliverySerializable
+        public interface IProducerCommand
         {
         }
 
         /// <summary>
         /// Marker interface for an output event from the producer controller.
         /// </summary>
-        public interface IProducerEvent : IDeliverySerializable
+        public interface IProducerEvent
         {
             string ProducerId { get; }
         }
-    }
-    
-   
-    
-    /// <summary>
-    /// A producer controller - takes messages from a local actor and uses
-    /// them to guarantee 
-    /// </summary>
-    /// <typeparam name="TMessage">Should ideally be a marker interface</typeparam>
-    public class ProducerController<TMessage> : ReceiveActor
-    {
-        private readonly string _producerId;
-        private IActorRef _producer;
-        private IActorRef _consumerController;
-        private readonly ProducerController.Settings _settings;
-        public ProducerController(string producerId, ProducerController.Settings settings)
+        
+        
+        /// <summary>
+        /// Message is sent to a producer to request the next message in a sequence
+        /// </summary>
+        public sealed class RequestNext<TMessage> : IProducerCommand
         {
-            _settings = settings;
-            _producerId = producerId;
-        }
-    }
+            public RequestNext(string producerId, long currentSeqNo, long confirmedSeqNo, IActorRef sendConfirmationTo)
+            {
+                ProducerId = producerId;
+                CurrentSeqNo = currentSeqNo;
+                ConfirmedSeqNo = confirmedSeqNo;
+                SendConfirmationTo = sendConfirmationTo;
+            }
 
-    /// <summary>
-    /// A single producer matches to a single ProducerController. This message
-    /// is used to register the producer with the ProducerController and signal that message
-    /// production is ready to begin.
-    /// </summary>
-    public sealed class Start : ProducerController.IProducerCommand
-    {
-        public Start(IActorRef producer)
-        {
-            Producer = producer;
+            public string ProducerId { get; }
+
+            public SeqNo CurrentSeqNo { get; }
+
+            public SeqNo ConfirmedSeqNo { get; }
+
+            public IActorRef SendConfirmationTo { get; }
         }
 
-        public IActorRef Producer { get; }
-    }
-
-    public class RegisterConsumer : ProducerController.IProducerCommand
-    {
-        public RegisterConsumer(IActorRef consumer)
+        public sealed class MessageWithConfirmation<TMessage> : IProducerCommand, IDeliverySerializable
         {
-            Consumer = consumer;
-        }
+            public MessageWithConfirmation(TMessage message, IActorRef sendConfirmationTo)
+            {
+                Message = message;
+                ReplyTo = sendConfirmationTo;
+            }
 
-        public IActorRef Consumer { get; }
+            public TMessage Message { get; }
+
+            public IActorRef ReplyTo { get; }
+        }
     }
 }
