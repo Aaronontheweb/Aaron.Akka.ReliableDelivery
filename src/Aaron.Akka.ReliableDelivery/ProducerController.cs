@@ -1,79 +1,128 @@
 ﻿using System;
 using Akka.Actor;
-using SeqNo = System.Int64;
 
 namespace Aaron.Akka.ReliableDelivery
 {
-    public static class ProducerController
+    public static class DeliveryProtocol
     {
-        public sealed class Settings
-        {
-            public Settings(int? chunkLargeMessageBytes = null)
-            {
-                ChunkLargeMessageBytes = chunkLargeMessageBytes;
-            }
-
-            /// <summary>
-            /// If non-null, determines the chunk size we use for transmitting large messages
-            /// over the network to the consumer. If null, we don't chunk or serialize large messages.
-            /// </summary>
-            public int? ChunkLargeMessageBytes { get; }
-
-            public Settings WithChunkLargeMessageBytes(int? chunkLargeMessageBytes)
-            {
-                return new Settings(chunkLargeMessageBytes);
-            }
-        }
-
         /// <summary>
-        /// Marker interface to indicate that a message belongs to the reliable delivery domain.
+        /// Instructions intended for producers.
         /// </summary>
-        public interface IProducerCommand
-        {
-        }
-
-        /// <summary>
-        /// Marker interface for an output event from the producer controller.
-        /// </summary>
-        public interface IProducerEvent
-        {
-            string ProducerId { get; }
-        }
-        
+        public interface IProducerCommand{ }
         
         /// <summary>
-        /// Message is sent to a producer to request the next message in a sequence
+        /// Message sent from the Producer to the ProducerController to start the flow.
         /// </summary>
-        public sealed class RequestNext<TMessage> : IProducerCommand
+        /// <remarks>
+        /// If a Producer actor ever restarts, it must send this message to the ProducerController.
+        /// </remarks>
+        /// <typeparam name="T">The type of messages supported by the ProducerController.</typeparam>
+        public sealed class Start<T> : IProducerCommand
         {
-            public RequestNext(string producerId, long currentSeqNo, long confirmedSeqNo, IActorRef sendConfirmationTo)
+            public Start(IActorRef producer)
+            {
+                Producer = producer;
+            }
+            
+            public IActorRef Producer { get; }
+        }
+
+        /// <summary>
+        /// Sent from the ProducerController to the Producer to request the next message in the sequence.
+        /// </summary>
+        /// <typeparam name="T">The type of messages supported by the ProducerController.</typeparam>
+        public sealed class RequestNext<T> : IProducerCommand
+        {
+            public RequestNext(string producerId, long currentSeqNo, long confirmedSeqNo)
             {
                 ProducerId = producerId;
                 CurrentSeqNo = currentSeqNo;
                 ConfirmedSeqNo = confirmedSeqNo;
-                SendConfirmationTo = sendConfirmationTo;
             }
 
             public string ProducerId { get; }
-
-            public SeqNo CurrentSeqNo { get; }
-
-            public SeqNo ConfirmedSeqNo { get; }
-
-            public IActorRef SendConfirmationTo { get; }
+            
+            public long CurrentSeqNo { get; }
+            
+            public long ConfirmedSeqNo { get; }
         }
 
-        public sealed class MessageWithConfirmation<TMessage> : IProducerCommand, IDeliverySerializable
+        /// <summary>
+        /// Instructions intended for consumers
+        /// </summary>
+        public interface IConsumerCommand
         {
-            public MessageWithConfirmation(TMessage message, IActorRef sendConfirmationTo)
+            
+        }
+
+        /// <summary>
+        /// Message is sent to the <see cref="ProducerController{T}"/> actor to request the next messages
+        /// in the sequence.
+        /// </summary>
+        /// <remarks>
+        /// This message must be serializable.
+        /// </remarks>
+        public sealed class Request : IProducerCommand, IDeliverySerializable
+        {
+            public Request(long confirmedSeqNo, long requestUpToSeqNo, bool supportResend)
             {
-                Message = message;
-                ReplyTo = sendConfirmationTo;
+                ConfirmedSeqNo = confirmedSeqNo;
+                RequestUpToSeqNo = requestUpToSeqNo;
+                
+                // validate that ConfirmedSeqNo is less than or equal to RequestUpToSeqNo
+                if (ConfirmedSeqNo > RequestUpToSeqNo)
+                    throw new ArgumentOutOfRangeException(
+                        $"ConfirmedSeqNo [{ConfirmedSeqNo}] should be <= RequestUpToSeqNo [{RequestUpToSeqNo}]");
+                
+                SupportResend = supportResend;
             }
 
-            public TMessage Message { get; }
+            /// <summary>
+            /// The most recently confirmed sequence number by the consumer.
+            /// </summary>
+            public long ConfirmedSeqNo { get; }
+            
+            /// <summary>
+            /// Typically the next sequence number that is expected by the consumer.
+            /// </summary>
+            public long RequestUpToSeqNo { get; }
+            
+            /// <summary>
+            /// Resend is only needed for point-to-point delivery, not for pull-based delivery.
+            /// </summary>
+            public bool SupportResend { get; }
+        }
+        
+        /// <summary>
+        /// Sent from a consumer controller to the actor.
+        /// </summary>
+        /// <typeparam name="T">The type of message being processed.</typeparam>
+        public sealed class Delivery<T> : IConsumerCommand
+        {
+            public Delivery(T message, long seqNo, string producerId)
+            {
+                Message = message;
+                SeqNo = seqNo;
+                ProducerId = producerId;
+            }
 
-            public IActorRef ReplyTo { get; }
+            public T Message { get; }
+            public long SeqNo { get; }
+            public string ProducerId { get; }
+            
+            public Confirmed ToConfirmed() => new Confirmed(SeqNo, ProducerId);
+        }
+        
+        public sealed class Confirmed : IConsumerCommand
+        {
+            public Confirmed(long seqNo, string producerId)
+            {
+                SeqNo = seqNo;
+                ProducerId = producerId;
+            }
+
+            public long SeqNo { get; }
+            public string ProducerId { get; }
         }
     }
 }
