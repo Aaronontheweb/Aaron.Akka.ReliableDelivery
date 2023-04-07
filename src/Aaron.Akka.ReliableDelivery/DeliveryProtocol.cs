@@ -3,6 +3,9 @@ using Akka.Actor;
 
 namespace Aaron.Akka.ReliableDelivery
 {
+    /// <summary>
+    /// Public methods on the delivery protocol
+    /// </summary>
     public static class DeliveryProtocol
     {
         /// <summary>
@@ -25,6 +28,20 @@ namespace Aaron.Akka.ReliableDelivery
             }
             
             public IActorRef Producer { get; }
+        }
+
+        /// <summary>
+        /// Registers a ConsumerController with a ProducerController.
+        /// </summary>
+        /// <typeparam name="T">The type of messages supported by the ProducerController.</typeparam>
+        public sealed class RegisterConsumer<T> : IProducerCommand, IDeliverySerializable
+        {
+            public RegisterConsumer(IActorRef consumer)
+            {
+                Consumer = consumer;
+            }
+
+            public IActorRef Consumer { get; }
         }
 
         /// <summary>
@@ -113,6 +130,9 @@ namespace Aaron.Akka.ReliableDelivery
             public Confirmed ToConfirmed() => new Confirmed(SeqNo, ProducerId);
         }
         
+        /// <summary>
+        /// Sent from the consumer actor back to the ConsumerController to confirm that the message was processed.
+        /// </summary>
         public sealed class Confirmed : IConsumerCommand
         {
             public Confirmed(long seqNo, string producerId)
