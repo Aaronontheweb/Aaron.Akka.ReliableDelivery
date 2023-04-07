@@ -1,4 +1,4 @@
-﻿using Aaron.Akka.ReliableDelivery.Internal;
+using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Event;
 
@@ -7,13 +7,13 @@ namespace Aaron.Akka.ReliableDelivery;
 public static class ConsumerController
 {
     /// <summary>
-    /// Interface for all commands sent to or from the ConsumerController.
+    /// Commands that are specific to the consumer side of the <see cref="ReliableDelivery"/> pattern.
     /// </summary>
-    /// <typeparam name="T">The type of messages handled by the ConsumerController.</typeparam>
-    public interface IConsumerCommand<T>{}
+    /// <typeparam name="T">The type of messages the consumer manages.</typeparam>
+    public interface IConsumerCommand<T>{ }
     
     /// <summary>
-    /// Signals that the consumer is ready to start consuming.
+    /// Used to signal to the ConsumerController that we're ready to start message production.
     /// </summary>
     public sealed class Start<T> : IConsumerCommand<T>
     {
@@ -26,69 +26,79 @@ public static class ConsumerController
     }
     
     /// <summary>
-    /// Sent from a consumer controller to the actor.
+    /// A sequenced message that is delivered to the consumer via the ProducerController.
     /// </summary>
-    /// <typeparam name="T">The type of message being processed.</typeparam>
-    public sealed class Delivery<T> : IConsumerCommand<T>
+    /// <typeparam name="T"></typeparam>
+    public sealed class SequencedMessage<T> : IConsumerCommand<T>, IDeliverySerializable, IDeadLetterSuppression
     {
-        public Delivery(T message, long seqNo, string producerId)
+        public SequencedMessage(long seqNr, string producerId, T message)
         {
+            SeqNr = seqNr;
             Message = message;
-            SeqNo = seqNo;
             ProducerId = producerId;
         }
 
-        public T Message { get; }
-        public long SeqNo { get; }
-        public string ProducerId { get; }
-            
-        /// <summary>
-        /// Generates a <see cref="Confirmed{T}"/> message to be sent back to the <see cref="ConsumerController{T}"/>.
-        /// </summary>
-        public Confirmed<T> ToConfirmed() => new(SeqNo, ProducerId);
-    }
+        public long SeqNr { get; }
         
-    /// <summary>
-    /// Sent from the consumer actor back to the ConsumerController to confirm that the message was processed.
-    /// </summary>
-    public sealed class Confirmed<T> : IConsumerCommand<T>
-    {
-        public Confirmed(long seqNo, string producerId)
-        {
-            SeqNo = seqNo;
-            ProducerId = producerId;
-        }
-
-        public long SeqNo { get; }
         public string ProducerId { get; }
+        public T Message { get; }
     }
     
     /// <summary>
-    /// This message is used to exchange messages between the <see cref="ProducerController"/> and the <see cref="ConsumerController"/>.
+    /// Sent from the consumer controller to the consumer.
     /// </summary>
-    /// <remarks>
-    /// Not really meant to be called from within application code.
-    /// </remarks>
-    public sealed class SequencedMessage<T> : IConsumerCommand<T>, IDeliverySerializable, IDeadLetterSuppression
+    public sealed class Delivery<T> : IConsumerCommand<T>, IDeliverySerializable, IDeadLetterSuppression
     {
-        public SequencedMessage(string producerId, long seqNo, T message, bool ack)
+        public Delivery(long seqNr, string producerId, T message)
         {
-            ProducerId = producerId;
-            SeqNo = seqNo;
+            SeqNr = seqNr;
             Message = message;
-            Ack = ack;
+            ProducerId = producerId;
         }
 
+        public long SeqNr { get; }
+        
         public string ProducerId { get; }
-        public long SeqNo { get; }
         public T Message { get; }
         
         /// <summary>
-        /// When <c>true</c>, means we expect an <see cref="Ack"/> message back from the consumer.
+        /// Creates a confirmation message that can be sent back to the producer.
         /// </summary>
-        /// <remarks>
-        /// This happens in Point-to-Point mode, but not in Consumer-Pull mode.
-        /// </remarks>
-        public bool Ack { get; }
+        public Confirmed<T> Confirmation => new(ProducerId, SeqNr);
+    }
+
+    /// <summary>
+    /// Acknowledgement of a message that was received by the consumer, sent to the ConsumerController.
+    /// </summary>
+    public sealed class Confirmed<T> : IConsumerCommand<T>
+    {
+        public Confirmed(string producerId, long confirmedSeqNr)
+        {
+            ProducerId = producerId;
+            ConfirmedSeqNr = confirmedSeqNr;
+        }
+
+        public string ProducerId { get; }
+        
+        public long ConfirmedSeqNr { get; }
+    }
+
+    /// <summary>
+    /// Send from the ConsumerController to the ProducerController to request more messages.
+    /// </summary>
+    public sealed class Request<T> : IDeliverySerializable, IDeadLetterSuppression
+    {
+        public Request(string producerId, long fromSeqNr, long confirmedSeqNr)
+        {
+            ProducerId = producerId;
+            FromSeqNr = fromSeqNr;
+            ConfirmedSeqNr = confirmedSeqNr;
+        }
+
+        public string ProducerId { get; }
+        
+        public long FromSeqNr { get; }
+        
+        public long ConfirmedSeqNr { get; }
     }
 }
