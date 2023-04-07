@@ -81,6 +81,22 @@ public static class ProducerController
 
         public long ConfirmedSeqNo { get; }
     }
+    
+    /// <summary>
+    /// For sending a message back to the producer when the message has been confirmed.
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    public sealed class MessageWithConfirmation<T> : IProducerCommand<T>
+    {
+        public MessageWithConfirmation(T message, IActorRef replyTo)
+        {
+            Message = message;
+            ReplyTo = replyTo;
+        }
+
+        public T Message { get; }
+        public IActorRef ReplyTo { get; }
+    }
 }
 
 /// <summary>
@@ -90,7 +106,7 @@ public static class ProducerController
 /// This is the point-to-point version of the reliable delivery flow.
 /// </remarks>
 /// <typeparam name="T">The type of messages supported by this <see cref="ProducerController"/></typeparam>
-internal sealed class ProducerController<T> : UntypedActorWithUnboundedStash
+internal sealed class ProducerController<T> : ReceiveActor, IWithUnboundedStash, IWithTimers
 {
     /// <summary>
     /// Default send function for when none are specified.
@@ -100,15 +116,17 @@ internal sealed class ProducerController<T> : UntypedActorWithUnboundedStash
     public string ProducerId { get; }
 
     public State CurrentState { get; private set; }
-
-    private IActorRef? _producer = ActorRefs.NoSender;
+    
     private IActorRef? _consumerController = ActorRefs.NoSender;
+    private readonly ILoggingAdapter _log = Context.GetLogger();
 
     public ProducerController(string producerId, Func<ConsumerController.SequencedMessage<T>, object> send)
     {
         ProducerId = producerId;
         CurrentState = new State(false, 0L, 0L, 0L, 0L, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty,
             null, send);
+        
+        WaitingForInitialization();
     }
 
     #region State Definition
@@ -247,6 +265,22 @@ internal sealed class ProducerController<T> : UntypedActorWithUnboundedStash
         public long FromSeqNo { get; }
     }
 
+    public sealed class ResendFirst : IInternalProducerCommand
+    {
+        private ResendFirst()
+        {
+        }
+        public static readonly ResendFirst Instance = new();
+    }
+    
+    public sealed class ResendUnconfirmed : IInternalProducerCommand
+    {
+        private ResendUnconfirmed()
+        {
+        }
+        public static readonly ResendUnconfirmed Instance = new();
+    }
+
     public sealed class Ack : IInternalProducerCommand, IDeliverySerializable, IDeadLetterSuppression
     {
         public Ack(long confirmedSeqNo)
@@ -258,10 +292,69 @@ internal sealed class ProducerController<T> : UntypedActorWithUnboundedStash
     }
 
     #endregion
-
-
-   
-    protected override void OnReceive(object message)
+    
+    private bool ReadyToBecomeActive => !_consumerController.IsNobody() && !CurrentState.Producer.IsNobody();
+    
+    private static void AssertLocalProducer(IActorRef producer)
     {
+        if (producer is IActorRefScope { IsLocal: false })
+            throw new ArgumentException(
+                $"Producer [{producer}] must be local");
     }
+
+    /// <summary>
+    /// Need the producer to be registered before we can do much
+    /// </summary>
+    private void WaitingForInitialization()
+    {
+        
+        // TODO: need to load persisted state here
+        Receive<ProducerController.RegisterConsumer<T>>(consumer =>
+        {
+            _consumerController = consumer.Consumer;
+            if (ReadyToBecomeActive)
+            {
+                BecomeActive();
+            }
+        });
+        
+        Receive<ProducerController.Start<T>>(start =>
+        {
+            AssertLocalProducer(start.Producer);
+            CurrentState = CurrentState.With(producer: start.Producer);
+            if(ReadyToBecomeActive)
+            {
+                BecomeActive();
+            }
+        });
+    }
+
+    private void BecomeActive()
+    {
+        var requested = false;
+        if (CurrentState.Unconfirmed.IsEmpty)
+        {
+            CurrentState.Producer.Tell(new ProducerController.RequestNext<T>(ProducerId, 1L, 0L));
+            requested = true;
+        }
+        else
+        {
+            _log.Debug("Starting with [{0}] unconfirmed", CurrentState.Unconfirmed.Count);
+            Self.Tell(ResendFirst.Instance);
+            requested = false;
+        }
+        
+        CurrentState = CurrentState.With(requested: requested);
+        
+        Become(Active);
+    }
+
+    private void Active()
+    {
+        Receive<ConsumerController<T>.MessageWithConfirmation<T>>    
+    }
+    
+
+    public IStash Stash { get; set; } = null!;
+    public ITimerScheduler Timers { get; set; } = null!;
 }
