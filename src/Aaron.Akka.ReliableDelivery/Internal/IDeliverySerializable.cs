@@ -1,6 +1,6 @@
 using Akka.Annotations;
 
-namespace Aaron.Akka.ReliableDelivery;
+namespace Aaron.Akka.ReliableDelivery.Internal;
 
 /// <summary>
 /// INTERNAL API
