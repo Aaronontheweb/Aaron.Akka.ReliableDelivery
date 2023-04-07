@@ -11,6 +11,8 @@
     <PackageLicenseUrl>
     </PackageLicenseUrl>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <LangVersion>11.0</LangVersion>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
   <PropertyGroup>
     <LibraryFramework>net6.0</LibraryFramework>

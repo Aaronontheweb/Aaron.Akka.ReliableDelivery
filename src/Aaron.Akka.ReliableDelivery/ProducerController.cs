@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections.Immutable;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Event;
+using Akka.Streams;
 
 namespace Aaron.Akka.ReliableDelivery;
 
@@ -84,14 +86,119 @@ public static class ProducerController
 /// <summary>
 /// INTERNAL API
 /// </summary>
+/// <remarks>
+/// This is the point-to-point version of the reliable delivery flow.
+/// </remarks>
 /// <typeparam name="T">The type of messages supported by this <see cref="ProducerController"/></typeparam>
-internal sealed class ProducerController<T>
+internal sealed class ProducerController<T> : UntypedActorWithUnboundedStash
 {
+    /// <summary>
+    /// Default send function for when none are specified.
+    /// </summary>
+    internal static readonly Func<ConsumerController.SequencedMessage<T>, object> DefaultSend = message => message;
+
+    public string ProducerId { get; }
+
+    public State CurrentState { get; private set; }
+
+    private IActorRef? _producer = ActorRefs.NoSender;
+    private IActorRef? _consumerController = ActorRefs.NoSender;
+
+    public ProducerController(string producerId, Func<ConsumerController.SequencedMessage<T>, object> send)
+    {
+        ProducerId = producerId;
+        CurrentState = new State(false, 0L, 0L, 0L, 0L, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty,
+            null, send);
+    }
+
+    #region State Definition
+
+    /// <summary>
+    /// Internal state of the <see cref="ProducerController{T}"/> actor.
+    /// </summary>
+    public readonly struct State
+    {
+        public State(bool requested, long currentSeqNo, long confirmedSeqNo, long requestedSeqNo, long firstSeqNo,
+            ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed,
+            IActorRef? producer, Func<ConsumerController.SequencedMessage<T>, object> send)
+        {
+            Requested = requested;
+            CurrentSeqNo = currentSeqNo;
+            ConfirmedSeqNo = confirmedSeqNo;
+            RequestedSeqNo = requestedSeqNo;
+            Producer = producer;
+            Send = send;
+            Unconfirmed = unconfirmed;
+            FirstSeqNo = firstSeqNo;
+        }
+
+        /// <summary>
+        /// Indicates whether or not the consumer has requested the first message in the sequence.
+        /// </summary>
+        public bool Requested { get; }
+
+        /// <summary>
+        /// The current max sequence number set by the producer's production.
+        /// </summary>
+        public long CurrentSeqNo { get; }
+
+        /// <summary>
+        /// The current max confirmed sequence number set by the consumer.
+        /// </summary>
+        public long ConfirmedSeqNo { get; }
+
+        /// <summary>
+        /// The highest requested sequence number by the consumer.
+        /// </summary>
+        /// <remarks>
+        /// Must be greater than or equal to <see cref="ConfirmedSeqNo"/>.
+        /// </remarks>
+        public long RequestedSeqNo { get; }
+
+        /// <summary>
+        /// The first sequence number observed by this ProducerController.
+        /// </summary>
+        public long FirstSeqNo { get; }
+
+        public ImmutableList<ConsumerController.SequencedMessage<T>> Unconfirmed { get; }
+
+        /// <summary>
+        /// The producer actor. Only populated once a <see cref="ProducerController.Start{T}"/> message is received.
+        /// </summary>
+        public IActorRef? Producer { get; }
+
+        /// <summary>
+        /// The adapter function used to optionally wrap messages before sending them to the consumer.
+        /// </summary>
+        public Func<ConsumerController.SequencedMessage<T>, object> Send { get; }
+
+        // create a method that allows for immutable copying of all properties, but also overriding of specific properties
+        public State With(bool? requested = null, long? currentSeqNo = null, long? confirmedSeqNo = null,
+            long? requestedSeqNo = null, long? firstSeqNo = null,
+            ImmutableList<ConsumerController.SequencedMessage<T>>? unconfirmed = null, IActorRef? producer = null)
+        {
+            return new State(
+                requested ?? Requested,
+                currentSeqNo ?? CurrentSeqNo,
+                confirmedSeqNo ?? ConfirmedSeqNo,
+                requestedSeqNo ?? RequestedSeqNo,
+                firstSeqNo ?? FirstSeqNo,
+                unconfirmed ?? Unconfirmed,
+                producer ?? Producer, Send);
+        }
+    }
+
+    #endregion
+
+    #region Internal Messages
+
     /// <summary>
     /// INTERNAL API
     /// </summary>
-    public interface IInternalProducerCommand{ }
-    
+    public interface IInternalProducerCommand
+    {
+    }
+
     /// <summary>
     /// Message is sent to the <see cref="ProducerController{T}"/> actor to request the next messages
     /// in the sequence.
@@ -129,7 +236,7 @@ internal sealed class ProducerController<T>
         /// </summary>
         public bool SupportResend { get; }
     }
-    
+
     public sealed class Resend : IInternalProducerCommand, IDeliverySerializable, IDeadLetterSuppression
     {
         public Resend(long fromSeqNo)
@@ -148,5 +255,13 @@ internal sealed class ProducerController<T>
         }
 
         public long ConfirmedSeqNo { get; }
+    }
+
+    #endregion
+
+
+   
+    protected override void OnReceive(object message)
+    {
     }
 }
