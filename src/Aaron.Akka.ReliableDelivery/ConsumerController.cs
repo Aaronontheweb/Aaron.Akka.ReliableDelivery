@@ -1,5 +1,6 @@
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
+using Akka.Annotations;
 using Akka.Event;
 using Akka.Util;
 
@@ -45,18 +46,24 @@ public static class ConsumerController
         public ChunkedMessage? Chunk { get; }
         
         public bool IsMessage => Message != null;
+        
+        public static implicit operator MessageOrChunk<T>(T message) => new(message);
+        
+        public static implicit operator MessageOrChunk<T>(ChunkedMessage chunkedMessage) => new(chunkedMessage);
     }
     
     /// <summary>
     /// A sequenced message that is delivered to the consumer via the ProducerController.
     /// </summary>
-    /// <typeparam name="T"></typeparam>
+    [InternalApi]
     public sealed class SequencedMessage<T> : IConsumerCommand<T>, IDeliverySerializable, IDeadLetterSuppression
     {
-        public SequencedMessage(long seqNr, string producerId, MessageOrChunk<T> messageOrChunk)
+        public SequencedMessage(string producerId, long seqNr, MessageOrChunk<T> messageOrChunk, bool first, bool ack)
         {
             SeqNr = seqNr;
             Message = messageOrChunk;
+            First = first;
+            Ack = ack;
             ProducerId = producerId;
         }
 
@@ -64,6 +71,19 @@ public static class ConsumerController
         
         public string ProducerId { get; }
         public MessageOrChunk<T> Message { get; }
+        
+        public bool First { get; }
+        
+        public bool Ack { get; }
+
+        internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true };
+        
+        internal bool IsLastChunk => Message.Chunk is { LastChunk: true };
+        
+        internal static SequencedMessage<T> FromChunkedMessage(string producerId, long seqNr, ChunkedMessage chunkedMessage, bool first, bool ack)
+        {
+            return new(producerId, seqNr, chunkedMessage, first, ack);
+        }
     }
     
     /// <summary>

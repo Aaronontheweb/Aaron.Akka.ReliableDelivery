@@ -1,10 +1,13 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Threading;
 using System.Threading.Channels;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Event;
+using Akka.IO;
 using Akka.Serialization;
 using Akka.Streams;
 
@@ -53,7 +56,6 @@ public static class ProducerController
     /// <summary>
     /// Signal to the ProducerController that we're ready to begin message production.
     /// </summary>
-    /// <typeparam name="T"></typeparam>
     public sealed class Start<T> : IProducerCommand<T>
     {
         public Start(IActorRef producer)
@@ -67,10 +69,9 @@ public static class ProducerController
     /// <summary>
     /// Message send back to the producer in response to a <see cref="Start{T}"/> command.
     /// </summary>
-    /// <typeparam name="T"></typeparam>
     public sealed class StartProduction<T> : IProducerCommand<T>, INoSerializationVerificationNeeded
     {
-        public StartProduction(string producerId, ChannelWriter<T> writer)
+        public StartProduction(string producerId, ChannelWriter<SendNext<T>> writer)
         {
             ProducerId = producerId;
             Writer = writer;
@@ -78,7 +79,29 @@ public static class ProducerController
 
         public string ProducerId { get; }
 
-        public ChannelWriter<T> Writer { get; }
+        public ChannelWriter<SendNext<T>> Writer { get; }
+    }
+    
+    /// <summary>
+    /// A send instruction sent from Producers to Consumers.
+    /// </summary>
+    public sealed class SendNext<T> : IProducerCommand<T>, INoSerializationVerificationNeeded
+    {
+        public SendNext(T message, IActorRef? sendConfirmationTo)
+        {
+            Message = message;
+            SendConfirmationTo = sendConfirmationTo;
+        }
+        
+        /// <summary>
+        /// The message that will actually be delivered to consumers.
+        /// </summary>
+        public T Message { get; }
+        
+        /// <summary>
+        /// If this field is populated, confirmation messages containing the current SeqNo (long) will be sent to this actor.
+        /// </summary>
+        public IActorRef? SendConfirmationTo { get; }
     }
 
     /// <summary>
@@ -157,8 +180,9 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     private readonly Func<ConsumerController.SequencedMessage<T>, object> _sendAdapter;
     
     private readonly ILoggingAdapter _log = Context.GetLogger();
-    private readonly Channel<T> _channel;
+    private readonly Channel<ProducerController.SendNext<T>> _channel;
     private IActorRef _consumerController = ActorRefs.NoSender;
+    private readonly Lazy<Serialization> _serialization = new(() => Context.System.Serialization);
     private readonly CancellationTokenSource _shutdownCancellation = new();
 
     private CancellationToken ShutdownToken => _shutdownCancellation.Token;
@@ -174,7 +198,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         ProducerId = producerId;
         Settings = settings;
         _sendAdapter = sendAdapter ?? DefaultSend;
-        _channel = Channel.CreateBounded<T>(new BoundedChannelOptions(Settings.DeliveryBufferSize)
+        _channel = Channel.CreateBounded<ProducerController.SendNext<T>>(new BoundedChannelOptions(Settings.DeliveryBufferSize)
         {
             SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
         }); // force busy producers to wait
@@ -332,9 +356,15 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private void Active()
     {
+        Receive<ProducerController.SendNext<T>>(sendNext =>
+        {
+            
+        });
+        
+        Receive<ResendFirst>(_ => ResendFirstMsg());
+        
         Receive<T>(msg => { });
     }
-
     protected override void PostStop()
     {
         // terminate any in-flight requests
@@ -348,8 +378,83 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private bool IsReadyForActivation =>
         CurrentState.Producer != ActorRefs.NoSender && _consumerController != ActorRefs.NoSender;
+    
+    private void ResendFirstMsg()
+    {
+        if (!CurrentState.Unconfirmed.IsEmpty && CurrentState.Unconfirmed[0].SeqNr == CurrentState.FirstSeqNr)
+        {
+            _log.Debug("Resending first message [{0}]", CurrentState.Unconfirmed[0].SeqNr);
+            _consumerController.Tell(_sendAdapter(CurrentState.Unconfirmed[0]));
+        }
+        else
+        {
+            if (CurrentState.CurrentSeqNr > CurrentState.FirstSeqNr)
+                Timers.Cancel(ResendFirst.Instance);
+        }
+    }
+
+    private ImmutableList<ConsumerController.SequencedMessage<T>> Chunk(T msg, bool ack, Serialization serialization)
+    {
+        var chunkSize = Settings.ChunkLargeMessagesBytes ?? 0;
+        if (chunkSize == 0) // chunking not enabled
+        {
+            var sequencedMessage = new ConsumerController.SequencedMessage<T>(ProducerId, CurrentState.CurrentSeqNr,
+                msg, CurrentState.CurrentSeqNr == CurrentState.FirstSeqNr, ack);
+            return ImmutableList<ConsumerController.SequencedMessage<T>>.Empty.Add(sequencedMessage);
+        }
+        else // chunking is enabled
+        {
+            var chunkedMessages = CreateChunks(msg, chunkSize, _serialization.Value).ToList();
+            if (_log.IsDebugEnabled)
+            {
+                if(chunkedMessages.Count == 1)
+                    _log.Debug("No chunking of SeqNo [{0}], size [{1}] bytes", CurrentState.CurrentSeqNr, chunkedMessages.First().SerializedMessage.Count);
+                else
+                    _log.Debug("Chunking SeqNo [{0}] into [{1}] chunks, total size [{2}] bytes", CurrentState.CurrentSeqNr, chunkedMessages.Count, chunkedMessages.Sum(x => x.SerializedMessage.Count));
+            }
+
+            var i = 0;
+            var chunks = chunkedMessages.Select(chunkedMessage =>
+            {
+                var seqNr = CurrentState.CurrentSeqNr + i;
+                i += 1;
+                var sequencedMessage = ConsumerController.SequencedMessage<T>.FromChunkedMessage(ProducerId, seqNr, chunkedMessage,
+                    seqNr == CurrentState.FirstSeqNr, ack);
+                return sequencedMessage;
+            }).ToImmutableList();
+
+            return chunks;
+        }
+    }
+
+    private IEnumerable<ChunkedMessage> CreateChunks(T msg, int chunkSize, Serialization serialization)
+    {
+        var serializer = serialization.FindSerializerForType(typeof(T));
+        var manifest = Serialization.ManifestFor(serializer, msg);
+        var serializerId = serializer.Identifier;
+        var bytes = serialization.Serialize(msg);
+        if (bytes.Length <= chunkSize)
+        {
+            var chunkedMessage = new ChunkedMessage(ByteString.CopyFrom(bytes), true, true, serializerId, manifest);
+            yield return chunkedMessage;
+        }
+        else
+        {
+            var chunkCount = (int) Math.Ceiling(bytes.Length / (double) chunkSize);
+            var first = true;
+            for (var i = 0; i < chunkCount; i++)
+            {
+                var isLast = i == chunkCount - 1;
+                var chunkedMessage = new ChunkedMessage(ByteString.CopyFrom(bytes, i * chunkSize, chunkSize), first,
+                    isLast, serializerId, manifest);
+
+                first = false;
+                yield return chunkedMessage;
+            }
+        }
+    }
 
     #endregion
 
-    public ITimerScheduler Timers { get; set; }
+    public ITimerScheduler Timers { get; set; } = null!;
 }
