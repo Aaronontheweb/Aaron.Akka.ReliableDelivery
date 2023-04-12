@@ -119,10 +119,12 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithUnboundedStash,
     
     private IActorRef? _consumerController = ActorRefs.NoSender;
     private readonly ILoggingAdapter _log = Context.GetLogger();
+    private readonly ProducerController.Settings _settings;
 
-    public ProducerController(string producerId, Func<ConsumerController.SequencedMessage<T>, object> send)
+    public ProducerController(string producerId, Func<ConsumerController.SequencedMessage<T>, object> send, ProducerController.Settings settings)
     {
         ProducerId = producerId;
+        _settings = settings;
         CurrentState = new State(false, 0L, 0L, 0L, 0L, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty,
             null, send);
         
@@ -337,7 +339,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithUnboundedStash,
             CurrentState.Producer.Tell(new ProducerController.RequestNext<T>(ProducerId, 1L, 0L));
             requested = true;
         }
-        else
+        else // will only be true if we've loaded our state from persistence
         {
             _log.Debug("Starting with [{0}] unconfirmed", CurrentState.Unconfirmed.Count);
             Self.Tell(ResendFirst.Instance);
@@ -351,7 +353,10 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithUnboundedStash,
 
     private void Active()
     {
-        Receive<ConsumerController<T>.MessageWithConfirmation<T>>    
+        Receive<ProducerController<T>.Request>(r =>
+        {
+
+        });
     }
     
 
