@@ -1,6 +1,7 @@
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Event;
+using Akka.Util;
 
 namespace Aaron.Akka.ReliableDelivery;
 
@@ -24,6 +25,27 @@ public static class ConsumerController
         
         public IActorRef Consumer { get; }
     }
+
+    public readonly struct MessageOrChunk<T>
+    {
+        public MessageOrChunk(T message)
+        {
+            Message = message;
+            Chunk = null;
+        }
+        
+        public MessageOrChunk(ChunkedMessage chunkedMessage)
+        {
+            Message = default;
+            Chunk = chunkedMessage;
+        }
+
+        public T? Message { get; }
+        
+        public ChunkedMessage? Chunk { get; }
+        
+        public bool IsMessage => Message != null;
+    }
     
     /// <summary>
     /// A sequenced message that is delivered to the consumer via the ProducerController.
@@ -31,17 +53,17 @@ public static class ConsumerController
     /// <typeparam name="T"></typeparam>
     public sealed class SequencedMessage<T> : IConsumerCommand<T>, IDeliverySerializable, IDeadLetterSuppression
     {
-        public SequencedMessage(long seqNr, string producerId, T message)
+        public SequencedMessage(long seqNr, string producerId, MessageOrChunk<T> messageOrChunk)
         {
             SeqNr = seqNr;
-            Message = message;
+            Message = messageOrChunk;
             ProducerId = producerId;
         }
 
         public long SeqNr { get; }
         
         public string ProducerId { get; }
-        public T Message { get; }
+        public MessageOrChunk<T> Message { get; }
     }
     
     /// <summary>

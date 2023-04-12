@@ -72,4 +72,8 @@ internal sealed class ProducerController<T> : ReceiveActor
     private readonly Lazy<IMaterializer> _materializer = new(() => Context.Materializer());
     private readonly ILoggingAdapter _log = Context.GetLogger();
     
+    /// <summary>
+    /// Default send function for when none are specified.
+    /// </summary>
+    internal static readonly Func<ConsumerController.SequencedMessage<T>, object> DefaultSend = message => message;
 }
