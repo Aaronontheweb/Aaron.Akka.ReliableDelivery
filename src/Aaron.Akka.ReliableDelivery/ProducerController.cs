@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Immutable;
+using System.Threading;
 using System.Threading.Channels;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
@@ -79,7 +80,7 @@ public static class ProducerController
 
         public ChannelWriter<T> Writer { get; }
     }
-    
+
     /// <summary>
     /// Registers a ConsumerController with a ProducerController.
     /// </summary>
@@ -92,12 +93,52 @@ public static class ProducerController
 
         public IActorRef ConsumerController { get; }
     }
-    
+
     internal static void AssertLocalProducer(IActorRef producer)
     {
         if (producer is IActorRefScope { IsLocal: false })
             throw new ArgumentException(
                 $"Producer [{producer}] must be local");
+    }
+
+    /// <summary>
+    /// Commands hidden from the public interface.
+    /// </summary>
+    internal interface IInternalCommand
+    {
+    }
+
+    /// <summary>
+    /// Sent by the ConsumerController to the ProducerController to request the next messages in the buffer.
+    /// </summary>
+    internal readonly struct Request : IInternalCommand, IDeadLetterSuppression, IDeliverySerializable
+    {
+        public Request(long confirmedSeqNo, long requestUpToSeqNo, bool supportResend)
+        {
+            ConfirmedSeqNo = confirmedSeqNo;
+            RequestUpToSeqNo = requestUpToSeqNo;
+            SupportResend = supportResend;
+
+            // assert that ConfirmedSeqNo <= RequestUpToSeqNo by throwing an ArgumentOutOfRangeException
+            if (ConfirmedSeqNo > RequestUpToSeqNo)
+                throw new ArgumentOutOfRangeException(nameof(confirmedSeqNo), confirmedSeqNo,
+                    $"ConfirmedSeqNo [{confirmedSeqNo}] must be less than or equal to RequestUpToSeqNo [{requestUpToSeqNo}]");
+        }
+
+        /// <summary>
+        /// Sequence numbers confirmed by the ConsumerController.
+        /// </summary>
+        public long ConfirmedSeqNo { get; }
+
+        /// <summary>
+        /// The next requested max sequence number.
+        /// </summary>
+        public long RequestUpToSeqNo { get; }
+
+        /// <summary>
+        /// Set to <c>false </c> in pull-mode.
+        /// </summary>
+        public bool SupportResend { get; }
     }
 }
 
@@ -105,7 +146,7 @@ public static class ProducerController
 /// INTERNAL API
 /// </summary>
 /// <typeparam name="T">The type of message handled by this producer</typeparam>
-internal sealed class ProducerController<T> : ReceiveActor
+internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 {
     public string ProducerId { get; }
 
@@ -114,11 +155,13 @@ internal sealed class ProducerController<T> : ReceiveActor
     public ProducerController.Settings Settings { get; }
 
     private readonly Func<ConsumerController.SequencedMessage<T>, object> _sendAdapter;
-
-    private readonly Lazy<IMaterializer> _materializer = new(() => Context.Materializer());
+    
     private readonly ILoggingAdapter _log = Context.GetLogger();
     private readonly Channel<T> _channel;
     private IActorRef _consumerController = ActorRefs.NoSender;
+    private readonly CancellationTokenSource _shutdownCancellation = new();
+
+    private CancellationToken ShutdownToken => _shutdownCancellation.Token;
 
     /// <summary>
     /// Default send function for when none are specified.
@@ -132,16 +175,18 @@ internal sealed class ProducerController<T> : ReceiveActor
         Settings = settings;
         _sendAdapter = sendAdapter ?? DefaultSend;
         _channel = Channel.CreateBounded<T>(new BoundedChannelOptions(Settings.DeliveryBufferSize)
-            { SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait }); // force busy producers to wait
+        {
+            SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
+        }); // force busy producers to wait
         CurrentState = new State(false, 0, 0, 0, 0, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty,
             ActorRefs.NoSender);
-        
+
         WaitingForActivation();
     }
-    
+
     #region Internal Message and State Types
-    
-        /// <summary>
+
+    /// <summary>
     /// The delivery state of the producer.
     /// </summary>
     public readonly struct State
@@ -192,51 +237,60 @@ internal sealed class ProducerController<T> : ReceiveActor
         /// A reference to the producer actor.
         /// </summary>
         public IActorRef? Producer { get; }
-        
+
         // copy state with new producer
-        public State WithProducer(IActorRef producer) => new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, Unconfirmed, producer);
-        
+        public State WithProducer(IActorRef producer) => new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr,
+            FirstSeqNr, Unconfirmed, producer);
+
         // copy state with new requested sequence number
-        public State WithRequestedSeqNr(long requestedSeqNr) => new(Requested, CurrentSeqNr, ConfirmedSeqNr, requestedSeqNr, FirstSeqNr, Unconfirmed, Producer);
-        
+        public State WithRequestedSeqNr(long requestedSeqNr) => new(Requested, CurrentSeqNr, ConfirmedSeqNr,
+            requestedSeqNr, FirstSeqNr, Unconfirmed, Producer);
+
         // copy state with new confirmed sequence number
-        public State WithConfirmedSeqNr(long confirmedSeqNr) => new(Requested, CurrentSeqNr, confirmedSeqNr, RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer);
-        
+        public State WithConfirmedSeqNr(long confirmedSeqNr) => new(Requested, CurrentSeqNr, confirmedSeqNr,
+            RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer);
+
         // copy state with new current sequence number
-        public State WithCurrentSeqNr(long currentSeqNr) => new(Requested, currentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer);
-        
+        public State WithCurrentSeqNr(long currentSeqNr) => new(Requested, currentSeqNr, ConfirmedSeqNr, RequestedSeqNr,
+            FirstSeqNr, Unconfirmed, Producer);
+
         // copy state with new unconfirmed messages
-        public State WithUnconfirmed(ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed) => new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, unconfirmed, Producer);
-        
+        public State WithUnconfirmed(ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed) =>
+            new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, unconfirmed, Producer);
+
         // copy state with new requested flag
-        public State WithRequested(bool requested) => new(requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer);
+        public State WithRequested(bool requested) => new(requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr,
+            FirstSeqNr, Unconfirmed, Producer);
     }
-    
+
     /// <summary>
     /// Send the first message with the lowest delivery id.
     /// </summary>
     public sealed class ResendFirst
     {
-        private ResendFirst() { }
+        private ResendFirst()
+        {
+        }
+
         public static readonly ResendFirst Instance = new();
     }
-    
-    #endregion 
+
+    #endregion
 
     #region Behaviors
-    
+
     private void WaitingForActivation()
     {
         // TODO: need to have durable state loading here also
-        
+
         Receive<ProducerController.Start<T>>(start =>
         {
             ProducerController.AssertLocalProducer(start.Producer);
             CurrentState = CurrentState.WithProducer(start.Producer);
-            
+
             // send ChannelWriter<T> to producer
             CurrentState.Producer.Tell(new ProducerController.StartProduction<T>(ProducerId, _channel.Writer));
-            
+
             if (IsReadyForActivation)
             {
                 BecomeActive();
@@ -246,7 +300,7 @@ internal sealed class ProducerController<T> : ReceiveActor
         Receive<ProducerController.RegisterConsumer<T>>(consumer =>
         {
             _consumerController = consumer.ConsumerController;
-            
+
             if (IsReadyForActivation)
             {
                 BecomeActive();
@@ -260,6 +314,9 @@ internal sealed class ProducerController<T> : ReceiveActor
         if (CurrentState.Unconfirmed.IsEmpty)
         {
             requested = true;
+
+            // kick off read task
+            _channel.Reader.ReadAsync(ShutdownToken).PipeTo(Self);
         }
         else // will only be true if we've loaded our state from persistence
         {
@@ -275,14 +332,24 @@ internal sealed class ProducerController<T> : ReceiveActor
 
     private void Active()
     {
-        
+        Receive<T>(msg => { });
+    }
+
+    protected override void PostStop()
+    {
+        // terminate any in-flight requests
+        _shutdownCancellation.Cancel();
+        base.PostStop();
     }
 
     #endregion
-    
+
     #region Internal Methods and Properties
-    
-    private bool IsReadyForActivation => CurrentState.Producer != ActorRefs.NoSender && _consumerController != ActorRefs.NoSender;
-    
+
+    private bool IsReadyForActivation =>
+        CurrentState.Producer != ActorRefs.NoSender && _consumerController != ActorRefs.NoSender;
+
     #endregion
+
+    public ITimerScheduler Timers { get; set; }
 }
