@@ -427,7 +427,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         }
     }
 
-    private IEnumerable<ChunkedMessage> CreateChunks(T msg, int chunkSize, Serialization serialization)
+    private static IEnumerable<ChunkedMessage> CreateChunks(T msg, int chunkSize, Serialization serialization)
     {
         var serializer = serialization.FindSerializerForType(typeof(T));
         var manifest = Serialization.ManifestFor(serializer, msg);
