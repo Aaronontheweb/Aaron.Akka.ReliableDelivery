@@ -1,12 +1,29 @@
 ﻿using System;
+using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Event;
+using Akka.Serialization;
 using Akka.Streams;
 
 namespace Aaron.Akka.ReliableDelivery;
 
 public static class ProducerController
 {
+    // TODO: HOCON configuration
+    public sealed class Settings
+    {
+        public Settings(int? chunkLargeMessagesBytes)
+        {
+            ChunkLargeMessagesBytes = chunkLargeMessagesBytes;
+        }
+
+        /// <summary>
+        /// If set to <c>null</c>, we will not chunk large messages. Otherwise, we will chunk messages larger than this value into [1,N] chunks of this size.
+        /// </summary>
+        public int? ChunkLargeMessagesBytes { get; }
+    }
+
+    
     /// <summary>
     /// Commands that are specific to the producer side of the <see cref="ReliableDelivery"/> pattern.
     /// </summary>
@@ -26,6 +43,23 @@ public static class ProducerController
         
         public IActorRef Producer { get; }
     }
+    
+    /// <summary>
+    /// Message send back to the producer in response to a <see cref="Start{T}"/> command.
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    public sealed class ProducerStarted<T> : IProducerCommand<T>, INoSerializationVerificationNeeded
+    {
+        public ProducerStarted(string producerId, ChannelWriter<T> writer)
+        {
+            ProducerId = producerId;
+            Writer = writer;
+        }
+        
+        public string ProducerId { get; }
+
+        public ChannelWriter<T> Writer { get; }
+    }
 }
 
 /// <summary>
@@ -37,6 +71,5 @@ internal sealed class ProducerController<T> : ReceiveActor
     public string ProducerId { get; }
     private readonly Lazy<IMaterializer> _materializer = new(() => Context.Materializer());
     private readonly ILoggingAdapter _log = Context.GetLogger();
-    
     
 }
