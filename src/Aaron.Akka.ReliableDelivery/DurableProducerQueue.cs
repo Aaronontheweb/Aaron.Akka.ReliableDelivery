@@ -88,7 +88,7 @@ public static class DurableProducerQueue
             return IsMessage ? $"Message: {Message}" : $"Chunk: {Chunk}";
         }
     }
-
+    
     /// <summary>
     /// The fact that a message has been sent.
     /// </summary>
@@ -158,6 +158,52 @@ public static class DurableProducerQueue
             ack = Ack;
             qualifier = Qualifier;
             timestamp = Timestamp;
+        }
+    }
+    
+    /// <summary>
+    /// INTERNAL API
+    ///
+    /// The fact that a message has been confirmed to be delivered and processed.
+    /// </summary>
+    internal sealed class Confirmed : IDurableProducerQueueEvent
+    {
+        public Confirmed(SeqNo seqNo, ConfirmationQualifier qualifier, long timestamp)
+        {
+            SeqNo = seqNo;
+            Qualifier = qualifier;
+            Timestamp = timestamp;
+        }
+
+        public SeqNo SeqNo { get; }
+
+        public ConfirmationQualifier Qualifier { get; }
+        
+        public Timestamp Timestamp { get; }
+
+        public override string ToString()
+        {
+            return $"Confirmed({SeqNo}, {Qualifier}, {Timestamp})";
+        }
+    }
+    
+    /// <summary>
+    /// INTERNAL API
+    ///
+    /// Remove entries related to the ConfirmationQualifiers that haven't been used in a while.
+    /// </summary>
+    internal sealed class Cleanup : IDurableProducerQueueEvent
+    {
+        public Cleanup(ISet<string> confirmationQualifiers)
+        {
+            ConfirmationQualifiers = confirmationQualifiers;
+        }
+
+        public ISet<ConfirmationQualifier> ConfirmationQualifiers { get; }
+        
+        public override string ToString()
+        {
+            return $"Cleanup({string.Join(", ", ConfirmationQualifiers)})";
         }
     }
 }
