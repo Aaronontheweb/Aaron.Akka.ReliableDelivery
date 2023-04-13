@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 
@@ -32,6 +34,87 @@ public static class DurableProducerQueue
         }
 
         public IActorRef ReplyTo { get; }
+    }
+
+    /// <summary>
+    /// Durable producer queue state
+    /// </summary>
+    public readonly struct State<T> : IDeliverySerializable
+    {
+        public State(long currentSeqNo, long highestConfirmedSeqNo,
+            ImmutableDictionary<string, (long, long)> confirmedSeqNr, ImmutableList<MessageSent<T>> unconfirmed)
+        {
+            CurrentSeqNo = currentSeqNo;
+            HighestConfirmedSeqNo = highestConfirmedSeqNo;
+            ConfirmedSeqNr = confirmedSeqNr;
+            Unconfirmed = unconfirmed;
+        }
+
+        public SeqNo CurrentSeqNo { get; }
+
+        public SeqNo HighestConfirmedSeqNo { get; }
+
+        public ImmutableDictionary<ConfirmationQualifier, (SeqNo, Timestamp)> ConfirmedSeqNr { get; }
+
+        public ImmutableList<MessageSent<T>> Unconfirmed { get; }
+
+        public State<T> AddMessageSent(MessageSent<T> messageSent) => new(messageSent.SeqNo + 1, HighestConfirmedSeqNo,
+            ConfirmedSeqNr, Unconfirmed.Add(messageSent));
+
+        public State<T> AddConfirmed(ConfirmationQualifier qualifier, SeqNo seqNo, Timestamp timestamp)
+        {
+            var newUnconfirmed = Unconfirmed.Where(c => !(c.SeqNo <= seqNo && c.Qualifier == qualifier))
+                .ToImmutableList();
+
+            return new State<T>(CurrentSeqNo, Math.Max(HighestConfirmedSeqNo, seqNo),
+                ConfirmedSeqNr.SetItem(qualifier, (seqNo, timestamp)), newUnconfirmed);
+        }
+
+        public State<T> CleanUp(ISet<ConfirmationQualifier> confirmationQualifiers)
+        {
+            return new State<T>(CurrentSeqNo, HighestConfirmedSeqNo, ConfirmedSeqNr.RemoveRange(confirmationQualifiers),
+                Unconfirmed);
+        }
+
+        /// <summary>
+        /// If not all chunked messages were stored before crash, those partial messages should not be resent.
+        /// </summary>
+        public State<T> CleanUpPartialChunkedMessages()
+        {
+            if(Unconfirmed.IsEmpty || Unconfirmed.All(u => u.IsFirstChunk && u.IsLastChunk))
+                return this;
+            
+            var tmp = ImmutableList.CreateBuilder<MessageSent<T>>();
+            var newUnconfirmed = ImmutableList.CreateBuilder<MessageSent<T>>();
+            var newCurrentSeqNr = HighestConfirmedSeqNo + 1;
+            foreach (var u in Unconfirmed)
+            {
+                if (u.IsFirstChunk && u.IsLastChunk)
+                {
+                    tmp.Clear();
+                    newUnconfirmed.Add(u);
+                    newCurrentSeqNr = u.SeqNo + 1;
+                }
+                else if (u is { IsFirstChunk: true, IsLastChunk: false })
+                {
+                    tmp.Clear();
+                    tmp.Add(u);
+                }
+                else if (!u.IsLastChunk)
+                {
+                    tmp.Add(u);
+                }
+                else if (u.IsLastChunk)
+                {
+                    newUnconfirmed.AddRange(tmp.ToImmutable());
+                    newUnconfirmed.Add(u);
+                    newCurrentSeqNr = u.SeqNo + 1;
+                    tmp.Clear();
+                }
+            }
+            
+            return new State<T>(newCurrentSeqNr, HighestConfirmedSeqNo, ConfirmedSeqNr, newUnconfirmed.ToImmutable());
+        }
     }
 
     /// <summary>
@@ -88,7 +171,7 @@ public static class DurableProducerQueue
             return IsMessage ? $"Message: {Message}" : $"Chunk: {Chunk}";
         }
     }
-    
+
     /// <summary>
     /// The fact that a message has been sent.
     /// </summary>
@@ -144,14 +227,17 @@ public static class DurableProducerQueue
         {
             return $"MessageSent({SeqNo}, {Message}, {Ack}, {Qualifier}, {Timestamp})";
         }
-        
-        public static MessageSent<T> FromChunked(SeqNo seqNo, ChunkedMessage chunkedMessage, bool ack, ConfirmationQualifier confirmationQualifier, Timestamp timestamp) =>
+
+        public static MessageSent<T> FromChunked(SeqNo seqNo, ChunkedMessage chunkedMessage, bool ack,
+            ConfirmationQualifier confirmationQualifier, Timestamp timestamp) =>
             new(seqNo, chunkedMessage, ack, confirmationQualifier, timestamp);
-        
-        public static MessageSent<T> FromMessageOrChunked(SeqNo seqNo, MessageOrChunk<T> messageOrChunk, bool ack, ConfirmationQualifier confirmationQualifier, Timestamp timestamp) =>
+
+        public static MessageSent<T> FromMessageOrChunked(SeqNo seqNo, MessageOrChunk<T> messageOrChunk, bool ack,
+            ConfirmationQualifier confirmationQualifier, Timestamp timestamp) =>
             new(seqNo, messageOrChunk, ack, confirmationQualifier, timestamp);
-        
-        public void Deconstruct(out SeqNo seqNo, out MessageOrChunk<T> message, out bool ack, out ConfirmationQualifier qualifier, out Timestamp timestamp)
+
+        public void Deconstruct(out SeqNo seqNo, out MessageOrChunk<T> message, out bool ack,
+            out ConfirmationQualifier qualifier, out Timestamp timestamp)
         {
             seqNo = SeqNo;
             message = Message;
@@ -160,7 +246,7 @@ public static class DurableProducerQueue
             timestamp = Timestamp;
         }
     }
-    
+
     /// <summary>
     /// INTERNAL API
     ///
@@ -178,7 +264,7 @@ public static class DurableProducerQueue
         public SeqNo SeqNo { get; }
 
         public ConfirmationQualifier Qualifier { get; }
-        
+
         public Timestamp Timestamp { get; }
 
         public override string ToString()
@@ -186,7 +272,7 @@ public static class DurableProducerQueue
             return $"Confirmed({SeqNo}, {Qualifier}, {Timestamp})";
         }
     }
-    
+
     /// <summary>
     /// INTERNAL API
     ///
@@ -200,7 +286,7 @@ public static class DurableProducerQueue
         }
 
         public ISet<ConfirmationQualifier> ConfirmationQualifiers { get; }
-        
+
         public override string ToString()
         {
             return $"Cleanup({string.Join(", ", ConfirmationQualifiers)})";
