@@ -35,12 +35,67 @@ public static class DurableProducerQueue
 
         public IActorRef ReplyTo { get; }
     }
+    
+    /// <summary>
+    /// Store the fact that a message is to be sent. Replies with <see cref="StoreMessageSentAck"/>
+    /// when the message has been successfully stored.
+    /// </summary>
+    /// <remarks>
+    /// This command may be retried and the implementation should be idempotent.
+    /// </remarks>
+    public sealed class StoreMessageSent<T> : IDurableProducerQueueCommand<T>
+    {
+        public StoreMessageSent(MessageSent<T> messageSent, IActorRef replyTo)
+        {
+            MessageSent = messageSent;
+            ReplyTo = replyTo;
+        }
+
+        public IActorRef ReplyTo { get; }
+
+        public MessageSent<T> MessageSent { get; }
+    }
+
+    public sealed class StoreMessageSentAck
+    {
+        public StoreMessageSentAck(long storedSeqNo)
+        {
+            StoredSeqNo = storedSeqNo;
+        }
+
+        public SeqNo StoredSeqNo { get; }
+    }
+    
+    /// <summary>
+    /// Store the fact that a message has been delivered and processed.
+    /// </summary>
+    /// <remarks>
+    /// This command may be retried and the implementation should be idempotent.
+    /// </remarks>
+    public sealed class StoreMessageConfirmed<T> : IDurableProducerQueueCommand<T>
+    {
+        public StoreMessageConfirmed(SeqNo seqNo, ConfirmationQualifier qualifier, Timestamp timestamp)
+        {
+            Qualifier = qualifier;
+            SeqNo = seqNo;
+            Timestamp = timestamp;
+        }
+
+        public ConfirmationQualifier Qualifier { get; }
+
+        public SeqNo SeqNo { get; }
+
+        public Timestamp Timestamp { get; }
+    }
 
     /// <summary>
     /// Durable producer queue state
     /// </summary>
     public readonly struct State<T> : IDeliverySerializable
     {
+        public static State<T> Empty { get; } = new(1, 0, ImmutableDictionary<string, (long, long)>.Empty,
+            ImmutableList<MessageSent<T>>.Empty);
+        
         public State(long currentSeqNo, long highestConfirmedSeqNo,
             ImmutableDictionary<string, (long, long)> confirmedSeqNr, ImmutableList<MessageSent<T>> unconfirmed)
         {
