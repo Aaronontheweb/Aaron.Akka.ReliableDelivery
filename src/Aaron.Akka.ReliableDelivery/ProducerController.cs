@@ -10,6 +10,7 @@ using Akka.Event;
 using Akka.IO;
 using Akka.Serialization;
 using Akka.Streams;
+using Akka.Util;
 
 namespace Aaron.Akka.ReliableDelivery;
 
@@ -81,7 +82,7 @@ public static class ProducerController
 
         public ChannelWriter<SendNext<T>> Writer { get; }
     }
-    
+
     /// <summary>
     /// A send instruction sent from Producers to Consumers.
     /// </summary>
@@ -92,12 +93,12 @@ public static class ProducerController
             Message = message;
             SendConfirmationTo = sendConfirmationTo;
         }
-        
+
         /// <summary>
         /// The message that will actually be delivered to consumers.
         /// </summary>
         public T Message { get; }
-        
+
         /// <summary>
         /// If this field is populated, confirmation messages containing the current SeqNo (long) will be sent to this actor.
         /// </summary>
@@ -175,10 +176,12 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     public State CurrentState { get; private set; }
 
+    public Option<IActorRef> DurableProducerQueue { get; }
+
     public ProducerController.Settings Settings { get; }
 
     private readonly Func<ConsumerController.SequencedMessage<T>, object> _sendAdapter;
-    
+
     private readonly ILoggingAdapter _log = Context.GetLogger();
     private readonly Channel<ProducerController.SendNext<T>> _channel;
     private IActorRef _consumerController = ActorRefs.NoSender;
@@ -193,15 +196,18 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     private static readonly Func<ConsumerController.SequencedMessage<T>, object> DefaultSend = message => message;
 
     public ProducerController(string producerId, ProducerController.Settings settings,
+        Option<IActorRef> durableProducerQueue,
         Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
     {
         ProducerId = producerId;
         Settings = settings;
+        DurableProducerQueue = durableProducerQueue;
         _sendAdapter = sendAdapter ?? DefaultSend;
-        _channel = Channel.CreateBounded<ProducerController.SendNext<T>>(new BoundedChannelOptions(Settings.DeliveryBufferSize)
-        {
-            SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
-        }); // force busy producers to wait
+        _channel = Channel.CreateBounded<ProducerController.SendNext<T>>(
+            new BoundedChannelOptions(Settings.DeliveryBufferSize)
+            {
+                SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
+            }); // force busy producers to wait
         CurrentState = new State(false, 0, 0, 0, 0, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty,
             ActorRefs.NoSender, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty);
 
@@ -216,7 +222,8 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     public readonly struct State
     {
         public State(bool requested, long currentSeqNr, long confirmedSeqNr, long requestedSeqNr, long firstSeqNr,
-            ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed, IActorRef? producer, ImmutableList<ConsumerController.SequencedMessage<T>> remainingChunks)
+            ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed, IActorRef? producer,
+            ImmutableList<ConsumerController.SequencedMessage<T>> remainingChunks)
         {
             Requested = requested;
             CurrentSeqNr = currentSeqNr;
@@ -257,7 +264,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         /// The unconfirmed messages that have been sent to the consumer.
         /// </summary>
         public ImmutableList<ConsumerController.SequencedMessage<T>> Unconfirmed { get; }
-        
+
         /// <summary>
         /// When chunked delivery is enabled, this is where the not-yet-transmitted chunks are stored.
         /// </summary>
@@ -286,15 +293,17 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
         // copy state with new unconfirmed messages
         public State WithUnconfirmed(ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed) =>
-            new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, unconfirmed, Producer, RemainingChunks);
+            new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, unconfirmed, Producer,
+                RemainingChunks);
 
         // copy state with new requested flag
         public State WithRequested(bool requested) => new(requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr,
             FirstSeqNr, Unconfirmed, Producer, RemainingChunks);
-        
+
         // copy state with new remaining chunks
         public State WithRemainingChunks(ImmutableList<ConsumerController.SequencedMessage<T>> remainingChunks) =>
-            new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer, remainingChunks);
+            new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer,
+                remainingChunks);
     }
 
     /// <summary>
@@ -366,15 +375,13 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private void Active()
     {
-        Receive<ProducerController.SendNext<T>>(sendNext =>
-        {
-            
-        });
-        
+        Receive<ProducerController.SendNext<T>>(sendNext => { });
+
         Receive<ResendFirst>(_ => ResendFirstMsg());
-        
+
         Receive<T>(msg => { });
     }
+
     protected override void PostStop()
     {
         // terminate any in-flight requests
@@ -388,7 +395,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private bool IsReadyForActivation =>
         CurrentState.Producer != ActorRefs.NoSender && _consumerController != ActorRefs.NoSender;
-    
+
     private void ResendFirstMsg()
     {
         if (!CurrentState.Unconfirmed.IsEmpty && CurrentState.Unconfirmed[0].SeqNr == CurrentState.FirstSeqNr)
@@ -417,10 +424,13 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             var chunkedMessages = CreateChunks(msg, chunkSize, _serialization.Value).ToList();
             if (_log.IsDebugEnabled)
             {
-                if(chunkedMessages.Count == 1)
-                    _log.Debug("No chunking of SeqNo [{0}], size [{1}] bytes", CurrentState.CurrentSeqNr, chunkedMessages.First().SerializedMessage.Count);
+                if (chunkedMessages.Count == 1)
+                    _log.Debug("No chunking of SeqNo [{0}], size [{1}] bytes", CurrentState.CurrentSeqNr,
+                        chunkedMessages.First().SerializedMessage.Count);
                 else
-                    _log.Debug("Chunking SeqNo [{0}] into [{1}] chunks, total size [{2}] bytes", CurrentState.CurrentSeqNr, chunkedMessages.Count, chunkedMessages.Sum(x => x.SerializedMessage.Count));
+                    _log.Debug("Chunking SeqNo [{0}] into [{1}] chunks, total size [{2}] bytes",
+                        CurrentState.CurrentSeqNr, chunkedMessages.Count,
+                        chunkedMessages.Sum(x => x.SerializedMessage.Count));
             }
 
             var i = 0;
@@ -428,7 +438,8 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             {
                 var seqNr = CurrentState.CurrentSeqNr + i;
                 i += 1;
-                var sequencedMessage = ConsumerController.SequencedMessage<T>.FromChunkedMessage(ProducerId, seqNr, chunkedMessage,
+                var sequencedMessage = ConsumerController.SequencedMessage<T>.FromChunkedMessage(ProducerId, seqNr,
+                    chunkedMessage,
                     seqNr == CurrentState.FirstSeqNr, ack);
                 return sequencedMessage;
             }).ToImmutableList();
@@ -450,7 +461,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         }
         else
         {
-            var chunkCount = (int) Math.Ceiling(bytes.Length / (double) chunkSize);
+            var chunkCount = (int)Math.Ceiling(bytes.Length / (double)chunkSize);
             var first = true;
             for (var i = 0; i < chunkCount; i++)
             {
