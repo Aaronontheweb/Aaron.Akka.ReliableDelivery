@@ -203,7 +203,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
         }); // force busy producers to wait
         CurrentState = new State(false, 0, 0, 0, 0, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty,
-            ActorRefs.NoSender);
+            ActorRefs.NoSender, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty);
 
         WaitingForActivation();
     }
@@ -216,7 +216,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     public readonly struct State
     {
         public State(bool requested, long currentSeqNr, long confirmedSeqNr, long requestedSeqNr, long firstSeqNr,
-            ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed, IActorRef? producer)
+            ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed, IActorRef? producer, ImmutableList<ConsumerController.SequencedMessage<T>> remainingChunks)
         {
             Requested = requested;
             CurrentSeqNr = currentSeqNr;
@@ -225,6 +225,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             FirstSeqNr = firstSeqNr;
             Unconfirmed = unconfirmed;
             Producer = producer;
+            RemainingChunks = remainingChunks;
         }
 
         /// <summary>
@@ -248,7 +249,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         public long RequestedSeqNr { get; }
 
         /// <summary>
-        /// The first sequence number observed by this producer.
+        /// The first sequence number in this state.
         /// </summary>
         public long FirstSeqNr { get; }
 
@@ -256,6 +257,11 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         /// The unconfirmed messages that have been sent to the consumer.
         /// </summary>
         public ImmutableList<ConsumerController.SequencedMessage<T>> Unconfirmed { get; }
+        
+        /// <summary>
+        /// When chunked delivery is enabled, this is where the not-yet-transmitted chunks are stored.
+        /// </summary>
+        public ImmutableList<ConsumerController.SequencedMessage<T>> RemainingChunks { get; }
 
         /// <summary>
         /// A reference to the producer actor.
@@ -264,27 +270,31 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
         // copy state with new producer
         public State WithProducer(IActorRef producer) => new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr,
-            FirstSeqNr, Unconfirmed, producer);
+            FirstSeqNr, Unconfirmed, producer, RemainingChunks);
 
         // copy state with new requested sequence number
         public State WithRequestedSeqNr(long requestedSeqNr) => new(Requested, CurrentSeqNr, ConfirmedSeqNr,
-            requestedSeqNr, FirstSeqNr, Unconfirmed, Producer);
+            requestedSeqNr, FirstSeqNr, Unconfirmed, Producer, RemainingChunks);
 
         // copy state with new confirmed sequence number
         public State WithConfirmedSeqNr(long confirmedSeqNr) => new(Requested, CurrentSeqNr, confirmedSeqNr,
-            RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer);
+            RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer, RemainingChunks);
 
         // copy state with new current sequence number
         public State WithCurrentSeqNr(long currentSeqNr) => new(Requested, currentSeqNr, ConfirmedSeqNr, RequestedSeqNr,
-            FirstSeqNr, Unconfirmed, Producer);
+            FirstSeqNr, Unconfirmed, Producer, RemainingChunks);
 
         // copy state with new unconfirmed messages
         public State WithUnconfirmed(ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed) =>
-            new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, unconfirmed, Producer);
+            new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, unconfirmed, Producer, RemainingChunks);
 
         // copy state with new requested flag
         public State WithRequested(bool requested) => new(requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr,
-            FirstSeqNr, Unconfirmed, Producer);
+            FirstSeqNr, Unconfirmed, Producer, RemainingChunks);
+        
+        // copy state with new remaining chunks
+        public State WithRemainingChunks(ImmutableList<ConsumerController.SequencedMessage<T>> remainingChunks) =>
+            new(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer, remainingChunks);
     }
 
     /// <summary>
