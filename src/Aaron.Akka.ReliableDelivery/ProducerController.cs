@@ -207,7 +207,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
                 SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
             }); // force busy producers to wait
         CurrentState = new State(false, 0, 0, 0, 0, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty,
-            ActorRefs.NoSender, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty);
+            ActorRefs.NoSender, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty, ImmutableDictionary<long, IActorRef>.Empty);
 
         WaitingForActivation();
     }
@@ -233,7 +233,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     {
         public State(bool requested, long currentSeqNr, long confirmedSeqNr, long requestedSeqNr, long firstSeqNr,
             ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed, IActorRef? producer,
-            ImmutableList<ConsumerController.SequencedMessage<T>> remainingChunks)
+            ImmutableList<ConsumerController.SequencedMessage<T>> remainingChunks, ImmutableDictionary<long, IActorRef> replyAfterStore)
         {
             Requested = requested;
             CurrentSeqNr = currentSeqNr;
@@ -243,6 +243,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             Unconfirmed = unconfirmed;
             Producer = producer;
             RemainingChunks = remainingChunks;
+            ReplyAfterStore = replyAfterStore;
         }
 
         /// <summary>
@@ -264,6 +265,8 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         ///     The current sequence number being requested by the consumer.
         /// </summary>
         public long RequestedSeqNr { get; }
+        
+        public ImmutableDictionary<long, IActorRef> ReplyAfterStore { get; }
 
         /// <summary>
         ///     The first sequence number in this state.
@@ -289,49 +292,56 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         public State WithProducer(IActorRef producer)
         {
             return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr,
-                FirstSeqNr, Unconfirmed, producer, RemainingChunks);
+                FirstSeqNr, Unconfirmed, producer, RemainingChunks, ReplyAfterStore);
         }
 
         // copy state with new requested sequence number
         public State WithRequestedSeqNr(long requestedSeqNr)
         {
             return new State(Requested, CurrentSeqNr, ConfirmedSeqNr,
-                requestedSeqNr, FirstSeqNr, Unconfirmed, Producer, RemainingChunks);
+                requestedSeqNr, FirstSeqNr, Unconfirmed, Producer, RemainingChunks, ReplyAfterStore);
         }
 
         // copy state with new confirmed sequence number
         public State WithConfirmedSeqNr(long confirmedSeqNr)
         {
             return new State(Requested, CurrentSeqNr, confirmedSeqNr,
-                RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer, RemainingChunks);
+                RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer, RemainingChunks, ReplyAfterStore);
         }
 
         // copy state with new current sequence number
         public State WithCurrentSeqNr(long currentSeqNr)
         {
             return new State(Requested, currentSeqNr, ConfirmedSeqNr, RequestedSeqNr,
-                FirstSeqNr, Unconfirmed, Producer, RemainingChunks);
+                FirstSeqNr, Unconfirmed, Producer, RemainingChunks, ReplyAfterStore);
         }
 
         // copy state with new unconfirmed messages
         public State WithUnconfirmed(ImmutableList<ConsumerController.SequencedMessage<T>> unconfirmed)
         {
             return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, unconfirmed, Producer,
-                RemainingChunks);
+                RemainingChunks, ReplyAfterStore);
         }
 
         // copy state with new requested flag
         public State WithRequested(bool requested)
         {
             return new State(requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr,
-                FirstSeqNr, Unconfirmed, Producer, RemainingChunks);
+                FirstSeqNr, Unconfirmed, Producer, RemainingChunks, ReplyAfterStore);
         }
 
         // copy state with new remaining chunks
         public State WithRemainingChunks(ImmutableList<ConsumerController.SequencedMessage<T>> remainingChunks)
         {
             return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer,
-                remainingChunks);
+                remainingChunks, ReplyAfterStore);
+        }
+        
+        // copy state with new reply after store
+        public State WithReplyAfterStore(ImmutableDictionary<long, IActorRef> replyAfterStore)
+        {
+            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, FirstSeqNr, Unconfirmed, Producer,
+                RemainingChunks, replyAfterStore);
         }
     }
 
@@ -418,6 +428,20 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private bool IsReadyForActivation =>
         CurrentState.Producer != ActorRefs.NoSender && _consumerController != ActorRefs.NoSender;
+
+    private void CheckOnMsgRequestedState()
+    {
+        if (!CurrentState.Requested || CurrentState.CurrentSeqNr > CurrentState.RequestedSeqNr)
+            throw new InvalidOperationException(
+                $"Unexpected Msg when no demand, requested: {CurrentState.Requested}, requestedSeqNr: {CurrentState.RequestedSeqNr}, currentSeqNr:{CurrentState.CurrentSeqNr}");
+    }
+
+    private void CheckReceiveMessageRemainingChunkState()
+    {
+        if (CurrentState.RemainingChunks.Any())
+            throw new InvalidOperationException(
+                $"Received unexpected message before sending remaining {CurrentState.RemainingChunks.Count} chunks");
+    }
 
     private void ResendFirstMsg()
     {
