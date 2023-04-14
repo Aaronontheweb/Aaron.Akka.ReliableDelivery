@@ -116,7 +116,7 @@ public static class DurableProducerQueue
         public State<T> AddMessageSent(MessageSent<T> messageSent) => new(messageSent.SeqNo + 1, HighestConfirmedSeqNo,
             ConfirmedSeqNr, Unconfirmed.Add(messageSent));
 
-        public State<T> AddConfirmed(ConfirmationQualifier qualifier, SeqNo seqNo, Timestamp timestamp)
+        public State<T> AddConfirmed(SeqNo seqNo, ConfirmationQualifier qualifier, Timestamp timestamp)
         {
             var newUnconfirmed = Unconfirmed.Where(c => !(c.SeqNo <= seqNo && c.Qualifier == qualifier))
                 .ToImmutableList();
@@ -201,16 +201,37 @@ public static class DurableProducerQueue
 
         public static implicit operator MessageOrChunk<T>(T message) => new(message);
 
+        public static implicit operator T(MessageOrChunk<T> message) => message.IsMessage
+            ? message.Message!
+            : throw new InvalidCastException($"MessageOrChunk<{typeof(T).Name}> is a ChunkedMessage and is not castable to [{typeof(T)}].");
+        
+        public static implicit operator ChunkedMessage(MessageOrChunk<T> message) => message.IsMessage
+            ? throw new InvalidCastException($"MessageOrChunk<{typeof(T).Name}> is a [{typeof(T)}] and is not castable to ChunkedMessage.")
+            : message.Chunk!.Value;
+
         public static implicit operator MessageOrChunk<T>(ChunkedMessage chunkedMessage) => new(chunkedMessage);
 
         public bool Equals(MessageOrChunk<T> other)
         {
             return EqualityComparer<T?>.Default.Equals(Message, other.Message) && Nullable.Equals(Chunk, other.Chunk);
         }
-
+        
         public override bool Equals(object? obj)
         {
-            return obj is MessageOrChunk<T> other && Equals(other);
+            if (obj is null)
+                return false;
+            
+            switch (obj)
+            {
+                case MessageOrChunk<T> other:
+                    return Equals(other);
+                case T msg when IsMessage:
+                    return EqualityComparer<T>.Default.Equals(Message!, msg);
+                case ChunkedMessage chunk when !IsMessage:
+                    return Chunk!.Equals(chunk);
+                default:
+                    return false;
+            }
         }
 
         public override int GetHashCode()

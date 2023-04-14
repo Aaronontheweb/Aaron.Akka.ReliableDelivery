@@ -5,6 +5,7 @@
   <!-- App dependencies -->
   <ItemGroup>
     <PackageVersion Include="Akka.Streams" Version="1.5.1" />
+    <PackageVersion Include="FluentAssertions" Version="6.10.0" />
   </ItemGroup>
   <!-- Test dependencies -->
   <ItemGroup>
