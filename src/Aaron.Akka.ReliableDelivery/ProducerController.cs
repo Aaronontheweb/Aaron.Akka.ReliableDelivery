@@ -36,7 +36,8 @@ public static class ProducerController
     {
         public const int DefaultDeliveryBufferSize = 128;
 
-        public Settings(bool requireConfirmationsToProducer, TimeSpan durableQueueRequestTimeout, int durableQueueAttemptRetries, int deliveryBufferSize = DefaultDeliveryBufferSize,
+        public Settings(bool requireConfirmationsToProducer, TimeSpan durableQueueRequestTimeout,
+            int durableQueueAttemptRetries, int deliveryBufferSize = DefaultDeliveryBufferSize,
             int? chunkLargeMessagesBytes = null)
         {
             ChunkLargeMessagesBytes = chunkLargeMessagesBytes;
@@ -66,7 +67,7 @@ public static class ProducerController
         /// The timeout for each request to the durable queue.
         /// </summary>
         public TimeSpan DurableQueueRequestTimeout { get; }
-        
+
         /// <summary>
         /// Number of retries allowed for each request to the durable queue.
         /// </summary>
@@ -268,7 +269,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     private readonly Lazy<Serialization> _serialization = new(() => Context.System.Serialization);
     private readonly CancellationTokenSource _shutdownCancellation = new();
     private IActorRef _consumerController = ActorRefs.NoSender;
-    private Option<Props> _durableProducerQueueProps;
+    private readonly Option<Props> _durableProducerQueueProps;
 
     public ProducerController(string producerId, ProducerController.Settings settings,
         Option<Props> durableProducerQueue,
@@ -283,6 +284,8 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             {
                 SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
             }); // force busy producers to wait
+        
+        // this state gets overridden during the loading sequence, so it's not used at all really
         CurrentState = new State(false, 0, 0, 0, true, 0, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty,
             ActorRefs.NoSender, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty,
             ImmutableDictionary<long, IActorRef>.Empty);
@@ -458,10 +461,10 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     private void WaitingForActivation()
     {
         var initialState = CreateInitialState(_durableProducerQueueProps.HasValue);
-        
+
         bool IsReadyForActivation() =>
-        !CurrentState.Producer.IsNobody() && !_consumerController.IsNobody() && initialState.HasValue;
-        
+            !CurrentState.Producer.IsNobody() && !_consumerController.IsNobody() && initialState.HasValue;
+
         Receive<ProducerController.Start<T>>(start =>
         {
             ProducerController.AssertLocalProducer(start.Producer);
@@ -470,20 +473,20 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             // send ChannelWriter<T> to producer
             CurrentState.Producer.Tell(new ProducerController.StartProduction<T>(ProducerId, _channel.Writer));
 
-            if (IsReadyForActivation()) BecomeActive(initialState.Value);
+            if (IsReadyForActivation()) BecomeActive(CreateState(start.Producer, initialState.Value));
         });
 
         Receive<ProducerController.RegisterConsumer<T>>(consumer =>
         {
             _consumerController = consumer.ConsumerController;
 
-            if (IsReadyForActivation()) BecomeActive(initialState.Value);
+            if (IsReadyForActivation()) BecomeActive(CreateState(CurrentState.Producer!, initialState.Value));
         });
-        
+
         Receive<ProducerController.LoadStateReply<T>>(reply =>
         {
             initialState = reply.State;
-            if (IsReadyForActivation()) BecomeActive(initialState.Value);
+            if (IsReadyForActivation()) BecomeActive(CreateState(CurrentState.Producer!, initialState.Value));
         });
 
         Receive<ProducerController.LoadStateFailed>(failed =>
@@ -496,20 +499,22 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             }
             else
             {
-                _log.Warning("LoadState failed, attempt [{0}] of [{1}], retrying", failed.Attempts, Settings.DurableQueueAttemptRetries);
+                _log.Warning("LoadState failed, attempt [{0}] of [{1}], retrying", failed.Attempts,
+                    Settings.DurableQueueAttemptRetries);
                 // retry
                 AskLoadState(DurableProducerQueueRef, failed.Attempts + 1);
             }
         });
-        
+
         Receive<ProducerController.DurableQueueTerminated>(terminated =>
         {
             throw new IllegalStateException("DurableQueue was unexpectedly terminated.");
         });
     }
 
-    private void BecomeActive(DurableProducerQueue.State<T> state)
+    private void BecomeActive(State state)
     {
+        CurrentState = state;
         var requested = false;
         if (CurrentState.Unconfirmed.IsEmpty)
         {
@@ -532,7 +537,17 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private void Active()
     {
-        Receive<ProducerController.SendNext<T>>(sendNext => { });
+        // receiving a live message with an explicit ACK target
+        Receive<ProducerController.SendNext<T>>(next => !next.SendConfirmationTo.IsNobody(), sendNext =>
+        {
+            CheckReceiveMessageRemainingChunkState();
+            var chunks = Chunk(sendNext.Message, true, _serialization.Value);
+            var newReplyAfterStore =
+                CurrentState.ReplyAfterStore.SetItem(chunks.Last().SeqNr, sendNext.SendConfirmationTo!);
+            if (DurableProducerQueueRef.IsEmpty)
+            {
+            }
+        });
 
         Receive<ResendFirst>(_ => ResendFirstMsg());
 
@@ -554,7 +569,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     #endregion
 
     #region Internal Methods and Properties
-    
+
     private void CheckOnMsgRequestedState()
     {
         if (!CurrentState.Requested || CurrentState.CurrentSeqNr > CurrentState.RequestedSeqNr)
@@ -567,6 +582,25 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         if (CurrentState.RemainingChunks.Any())
             throw new IllegalStateException(
                 $"Received unexpected message before sending remaining {CurrentState.RemainingChunks.Count} chunks");
+    }
+
+    private void OnMsg(ConsumerController.SequencedMessage<T> seqMsg,
+        ImmutableDictionary<long, IActorRef> newReplyAfterStore,
+        ImmutableList<ConsumerController.SequencedMessage<T>> remainingChunks)
+    {
+        CheckOnMsgRequestedState();
+        if (seqMsg.IsLastChunk && remainingChunks.Any())
+            throw new IllegalStateException(
+                $"SeqNsg [{seqMsg.SeqNr}] was last chunk but remaining {remainingChunks.Count} chunks");
+
+        if (_log.IsDebugEnabled)
+        {
+            _log.Debug("Sending [{0}] with seqNo [{1}] to consumer", seqMsg.Message, seqMsg.SeqNr);
+        }
+
+        var newUnconfirmed = CurrentState.SupportResend
+            ? CurrentState.Unconfirmed.Add(seqMsg)
+            : ImmutableList<ConsumerController.SequencedMessage<T>>.Empty; // no need to keep unconfirmed if no resend
     }
 
     private Option<IActorRef> AskLoadState()
