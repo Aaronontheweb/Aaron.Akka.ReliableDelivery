@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.IO;
+using Akka.Util.Internal;
 using FluentAssertions;
 using Xunit;
 using static Aaron.Akka.ReliableDelivery.DurableProducerQueue;
@@ -36,7 +37,7 @@ namespace Aaron.Akka.ReliableDelivery.Tests
         }
 
         [Fact]
-        public void DurableProducerQueueState_must_filterPartiallStoredChunkedMessages()
+        public void DurableProducerQueueState_must_filterPartiallyStoredChunkedMessages()
         {
             var state1 = State<string>.Empty.AddMessageSent(MessageSent<string>.FromChunked(1,
                     new ChunkedMessage(ByteString.FromString("a"), true, true, 20, ""), false, "", 0))
@@ -51,6 +52,44 @@ namespace Aaron.Akka.ReliableDelivery.Tests
             state2.Unconfirmed.First().Message.Chunk!.Value.SerializedMessage.Should()
                 .BeEquivalentTo(ByteString.FromString("a"));
             state2.CurrentSeqNo.Should().Be(2);
+
+            // replace the 2 incomplete chunks with complete ones
+            var state3 = state1.AddMessageSent(MessageSent<string>.FromChunked(2,
+                    new ChunkedMessage(ByteString.FromString("d"), true, false, 20, ""), false, "", 0))
+                .AddMessageSent(MessageSent<string>.FromChunked(3,
+                    new ChunkedMessage(ByteString.FromString("e"), false, true, 20, ""), false, "", 0));
+
+            var state4 = state3.CleanUpPartialChunkedMessages();
+            state4.Unconfirmed.Count.Should().Be(3);
+            state4.Unconfirmed.First().Message.Chunk!.Value.SerializedMessage.Should()
+                .BeEquivalentTo(ByteString.FromString("a"));
+            state4.Unconfirmed[1].Message.Chunk!.Value.SerializedMessage.Should()
+                .BeEquivalentTo(ByteString.FromString("d"));
+            state4.Unconfirmed[2].Message.Chunk!.Value.SerializedMessage.Should()
+                .BeEquivalentTo(ByteString.FromString("e"));
+
+            var state5 = state3.AddMessageSent(MessageSent<string>.FromChunked(4,
+                    new ChunkedMessage(ByteString.FromString("f"), true, false, 20, ""), false, "", 0))
+                .AddMessageSent(MessageSent<string>.FromChunked(5,
+                    new ChunkedMessage(ByteString.FromString("g"), false, false, 20, ""), false, "", 0))
+                .AddMessageSent(MessageSent<string>.FromChunked(4,
+                    new ChunkedMessage(ByteString.FromString("h"), true, true, 20, ""), false, "", 0))
+                .AddMessageSent(MessageSent<string>.FromChunked(5,
+                    new ChunkedMessage(ByteString.FromString("i"), true, false, 20, ""), false, "", 0))
+                .AddMessageSent(MessageSent<string>.FromChunked(6,
+                    new ChunkedMessage(ByteString.FromString("j"), false, false, 20, ""), false, "", 0));
+
+            var state6 = state5.CleanUpPartialChunkedMessages();
+            state6.Unconfirmed.Count.Should().Be(4);
+            state6.Unconfirmed.First().Message.Chunk!.Value.SerializedMessage.Should()
+                .BeEquivalentTo(ByteString.FromString("a"));
+            state6.Unconfirmed[1].Message.Chunk!.Value.SerializedMessage.Should()
+                .BeEquivalentTo(ByteString.FromString("d"));
+            state6.Unconfirmed[2].Message.Chunk!.Value.SerializedMessage.Should()
+                .BeEquivalentTo(ByteString.FromString("e"));
+            state6.Unconfirmed[3].Message.Chunk!.Value.SerializedMessage.Should()
+                .BeEquivalentTo(ByteString.FromString("h"));
+            state6.CurrentSeqNo.Should().Be(5);
         }
     }
 }
