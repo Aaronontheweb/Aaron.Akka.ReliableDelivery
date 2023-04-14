@@ -15,6 +15,7 @@ using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Event;
 using Akka.IO;
+using Akka.Pattern;
 using Akka.Serialization;
 using Akka.Util;
 using Microsoft.Extensions.ObjectPool;
@@ -35,13 +36,13 @@ public static class ProducerController
     {
         public const int DefaultDeliveryBufferSize = 128;
 
-        public Settings(bool requireConfirmationsToProducer, TimeSpan durableQueueRequestTimeout,
-            int deliveryBufferSize = DefaultDeliveryBufferSize,
+        public Settings(bool requireConfirmationsToProducer, TimeSpan durableQueueRequestTimeout, int durableQueueAttemptRetries, int deliveryBufferSize = DefaultDeliveryBufferSize,
             int? chunkLargeMessagesBytes = null)
         {
             ChunkLargeMessagesBytes = chunkLargeMessagesBytes;
             RequireConfirmationsToProducer = requireConfirmationsToProducer;
             DurableQueueRequestTimeout = durableQueueRequestTimeout;
+            DurableQueueAttemptRetries = durableQueueAttemptRetries;
             DeliveryBufferSize = deliveryBufferSize;
         }
 
@@ -65,6 +66,11 @@ public static class ProducerController
         /// The timeout for each request to the durable queue.
         /// </summary>
         public TimeSpan DurableQueueRequestTimeout { get; }
+        
+        /// <summary>
+        /// Number of retries allowed for each request to the durable queue.
+        /// </summary>
+        public int DurableQueueAttemptRetries { get; }
     }
 
 
@@ -451,8 +457,11 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private void WaitingForActivation()
     {
-        // TODO: need to have durable state loading here also
-
+        var initialState = CreateInitialState(_durableProducerQueueProps.HasValue);
+        
+        bool IsReadyForActivation() =>
+        !CurrentState.Producer.IsNobody() && !_consumerController.IsNobody() && initialState.HasValue;
+        
         Receive<ProducerController.Start<T>>(start =>
         {
             ProducerController.AssertLocalProducer(start.Producer);
@@ -461,18 +470,45 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             // send ChannelWriter<T> to producer
             CurrentState.Producer.Tell(new ProducerController.StartProduction<T>(ProducerId, _channel.Writer));
 
-            if (IsReadyForActivation) BecomeActive();
+            if (IsReadyForActivation()) BecomeActive(initialState.Value);
         });
 
         Receive<ProducerController.RegisterConsumer<T>>(consumer =>
         {
             _consumerController = consumer.ConsumerController;
 
-            if (IsReadyForActivation) BecomeActive();
+            if (IsReadyForActivation()) BecomeActive(initialState.Value);
+        });
+        
+        Receive<ProducerController.LoadStateReply<T>>(reply =>
+        {
+            initialState = reply.State;
+            if (IsReadyForActivation()) BecomeActive(initialState.Value);
+        });
+
+        Receive<ProducerController.LoadStateFailed>(failed =>
+        {
+            if (failed.Attempts > Settings.DurableQueueAttemptRetries)
+            {
+                var errorMessage = $"LoadState failed after [{failed.Attempts}] attempts. Giving up.";
+                _log.Error(errorMessage);
+                throw new TimeoutException(errorMessage);
+            }
+            else
+            {
+                _log.Warning("LoadState failed, attempt [{0}] of [{1}], retrying", failed.Attempts, Settings.DurableQueueAttemptRetries);
+                // retry
+                AskLoadState(DurableProducerQueueRef, failed.Attempts + 1);
+            }
+        });
+        
+        Receive<ProducerController.DurableQueueTerminated>(terminated =>
+        {
+            throw new IllegalStateException("DurableQueue was unexpectedly terminated.");
         });
     }
 
-    private void BecomeActive()
+    private void BecomeActive(DurableProducerQueue.State<T> state)
     {
         var requested = false;
         if (CurrentState.Unconfirmed.IsEmpty)
@@ -503,6 +539,11 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         Receive<T>(msg => { });
     }
 
+    protected override void PreStart()
+    {
+        DurableProducerQueueRef = AskLoadState();
+    }
+
     protected override void PostStop()
     {
         // terminate any in-flight requests
@@ -513,21 +554,18 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     #endregion
 
     #region Internal Methods and Properties
-
-    private bool IsReadyForActivation =>
-        CurrentState.Producer != ActorRefs.NoSender && _consumerController != ActorRefs.NoSender;
-
+    
     private void CheckOnMsgRequestedState()
     {
         if (!CurrentState.Requested || CurrentState.CurrentSeqNr > CurrentState.RequestedSeqNr)
-            throw new InvalidOperationException(
+            throw new IllegalStateException(
                 $"Unexpected Msg when no demand, requested: {CurrentState.Requested}, requestedSeqNr: {CurrentState.RequestedSeqNr}, currentSeqNr:{CurrentState.CurrentSeqNr}");
     }
 
     private void CheckReceiveMessageRemainingChunkState()
     {
         if (CurrentState.RemainingChunks.Any())
-            throw new InvalidOperationException(
+            throw new IllegalStateException(
                 $"Received unexpected message before sending remaining {CurrentState.RemainingChunks.Count} chunks");
     }
 
@@ -559,7 +597,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     private Option<DurableProducerQueue.State<T>> CreateInitialState(bool hasDurableQueue)
     {
         if (hasDurableQueue) return Option<DurableProducerQueue.State<T>>.None;
-        return Option<DurableProducerQueue.State<T>>.Create(ReliableDelivery.DurableProducerQueue.State<T>.Empty);
+        return Option<DurableProducerQueue.State<T>>.Create(DurableProducerQueue.State<T>.Empty);
     }
 
     private State CreateState(IActorRef producer, DurableProducerQueue.State<T> loadedState)
