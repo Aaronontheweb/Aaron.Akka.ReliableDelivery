@@ -1,13 +1,18 @@
-﻿using System;
+﻿// -----------------------------------------------------------------------
+//  <copyright file="Program.cs" company="Akka.NET Project">
+//      Copyright (C) 2009-2023 Lightbend Inc. <http://www.lightbend.com>
+//      Copyright (C) 2013-2023 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//  </copyright>
+// -----------------------------------------------------------------------
+
 using NBench;
 
-namespace Aaron.Akka.ReliableDelivery.Tests.Performance
+namespace Aaron.Akka.ReliableDelivery.Tests.Performance;
+
+internal class Program
 {
-    class Program
+    private static int Main(string[] args)
     {
-        static int Main(string[] args)
-        {
-            return NBenchRunner.Run<Program>();
-        }
+        return NBenchRunner.Run<Program>();
     }
 }

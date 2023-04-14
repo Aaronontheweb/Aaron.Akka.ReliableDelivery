@@ -1,4 +1,11 @@
-﻿using System;
+﻿// -----------------------------------------------------------------------
+//  <copyright file="DurableProducerQueue.cs" company="Akka.NET Project">
+//      Copyright (C) 2009-2023 Lightbend Inc. <http://www.lightbend.com>
+//      Copyright (C) 2013- .2023 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//  </copyright>
+// -----------------------------------------------------------------------
+
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -13,10 +20,10 @@ using SeqNo = Int64;
 
 public static class DurableProducerQueue
 {
-    public const ConfirmationQualifier NoQualifier = "";
+    public const string NoQualifier = "";
 
     /// <summary>
-    /// Marker interface for all commands handled by the durable producer queue.
+    ///     Marker interface for all commands handled by the durable producer queue.
     /// </summary>
     /// <typeparam name="T">The same type of messages that are handled by the ProducerController{T}</typeparam>
     public interface IDurableProducerQueueCommand<T>
@@ -24,7 +31,7 @@ public static class DurableProducerQueue
     }
 
     /// <summary>
-    /// Request used at startup to retrieve the unconfirmed messages and current sequence number.
+    ///     Request used at startup to retrieve the unconfirmed messages and current sequence number.
     /// </summary>
     public sealed class LoadState<T> : IDurableProducerQueueCommand<T>
     {
@@ -35,13 +42,13 @@ public static class DurableProducerQueue
 
         public IActorRef ReplyTo { get; }
     }
-    
+
     /// <summary>
-    /// Store the fact that a message is to be sent. Replies with <see cref="StoreMessageSentAck"/>
-    /// when the message has been successfully stored.
+    ///     Store the fact that a message is to be sent. Replies with <see cref="StoreMessageSentAck" />
+    ///     when the message has been successfully stored.
     /// </summary>
     /// <remarks>
-    /// This command may be retried and the implementation should be idempotent.
+    ///     This command may be retried and the implementation should be idempotent.
     /// </remarks>
     public sealed class StoreMessageSent<T> : IDurableProducerQueueCommand<T>
     {
@@ -63,39 +70,39 @@ public static class DurableProducerQueue
             StoredSeqNo = storedSeqNo;
         }
 
-        public SeqNo StoredSeqNo { get; }
+        public long StoredSeqNo { get; }
     }
-    
+
     /// <summary>
-    /// Store the fact that a message has been delivered and processed.
+    ///     Store the fact that a message has been delivered and processed.
     /// </summary>
     /// <remarks>
-    /// This command may be retried and the implementation should be idempotent.
+    ///     This command may be retried and the implementation should be idempotent.
     /// </remarks>
     public sealed class StoreMessageConfirmed<T> : IDurableProducerQueueCommand<T>
     {
-        public StoreMessageConfirmed(SeqNo seqNo, ConfirmationQualifier qualifier, Timestamp timestamp)
+        public StoreMessageConfirmed(long seqNo, string qualifier, long timestamp)
         {
             Qualifier = qualifier;
             SeqNo = seqNo;
             Timestamp = timestamp;
         }
 
-        public ConfirmationQualifier Qualifier { get; }
+        public string Qualifier { get; }
 
-        public SeqNo SeqNo { get; }
+        public long SeqNo { get; }
 
-        public Timestamp Timestamp { get; }
+        public long Timestamp { get; }
     }
 
     /// <summary>
-    /// Durable producer queue state
+    ///     Durable producer queue state
     /// </summary>
     public readonly struct State<T> : IDeliverySerializable
     {
         public static State<T> Empty { get; } = new(1, 0, ImmutableDictionary<string, (long, long)>.Empty,
             ImmutableList<MessageSent<T>>.Empty);
-        
+
         public State(long currentSeqNo, long highestConfirmedSeqNo,
             ImmutableDictionary<string, (long, long)> confirmedSeqNr, ImmutableList<MessageSent<T>> unconfirmed)
         {
@@ -105,18 +112,21 @@ public static class DurableProducerQueue
             Unconfirmed = unconfirmed;
         }
 
-        public SeqNo CurrentSeqNo { get; }
+        public long CurrentSeqNo { get; }
 
-        public SeqNo HighestConfirmedSeqNo { get; }
+        public long HighestConfirmedSeqNo { get; }
 
-        public ImmutableDictionary<ConfirmationQualifier, (SeqNo, Timestamp)> ConfirmedSeqNr { get; }
+        public ImmutableDictionary<string, (long, long)> ConfirmedSeqNr { get; }
 
         public ImmutableList<MessageSent<T>> Unconfirmed { get; }
 
-        public State<T> AddMessageSent(MessageSent<T> messageSent) => new(messageSent.SeqNo + 1, HighestConfirmedSeqNo,
-            ConfirmedSeqNr, Unconfirmed.Add(messageSent));
+        public State<T> AddMessageSent(MessageSent<T> messageSent)
+        {
+            return new State<T>(messageSent.SeqNo + 1, HighestConfirmedSeqNo,
+                ConfirmedSeqNr, Unconfirmed.Add(messageSent));
+        }
 
-        public State<T> AddConfirmed(SeqNo seqNo, ConfirmationQualifier qualifier, Timestamp timestamp)
+        public State<T> AddConfirmed(long seqNo, string qualifier, long timestamp)
         {
             var newUnconfirmed = Unconfirmed.Where(c => !(c.SeqNo <= seqNo && c.Qualifier == qualifier))
                 .ToImmutableList();
@@ -125,25 +135,24 @@ public static class DurableProducerQueue
                 ConfirmedSeqNr.SetItem(qualifier, (seqNo, timestamp)), newUnconfirmed);
         }
 
-        public State<T> CleanUp(ISet<ConfirmationQualifier> confirmationQualifiers)
+        public State<T> CleanUp(ISet<string> confirmationQualifiers)
         {
             return new State<T>(CurrentSeqNo, HighestConfirmedSeqNo, ConfirmedSeqNr.RemoveRange(confirmationQualifiers),
                 Unconfirmed);
         }
 
         /// <summary>
-        /// If not all chunked messages were stored before crash, those partial messages should not be resent.
+        ///     If not all chunked messages were stored before crash, those partial messages should not be resent.
         /// </summary>
         public State<T> CleanUpPartialChunkedMessages()
         {
-            if(Unconfirmed.IsEmpty || Unconfirmed.All(u => u.IsFirstChunk && u.IsLastChunk))
+            if (Unconfirmed.IsEmpty || Unconfirmed.All(u => u.IsFirstChunk && u.IsLastChunk))
                 return this;
-            
+
             var tmp = ImmutableList.CreateBuilder<MessageSent<T>>();
             var newUnconfirmed = ImmutableList.CreateBuilder<MessageSent<T>>();
             var newCurrentSeqNr = HighestConfirmedSeqNo + 1;
             foreach (var u in Unconfirmed)
-            {
                 if (u.IsFirstChunk && u.IsLastChunk)
                 {
                     tmp.Clear();
@@ -166,14 +175,13 @@ public static class DurableProducerQueue
                     newCurrentSeqNr = u.SeqNo + 1;
                     tmp.Clear();
                 }
-            }
-            
+
             return new State<T>(newCurrentSeqNr, HighestConfirmedSeqNo, ConfirmedSeqNr, newUnconfirmed.ToImmutable());
         }
     }
 
     /// <summary>
-    /// Internal events that are persisted by the durable producer queue.
+    ///     Internal events that are persisted by the durable producer queue.
     /// </summary>
     internal interface IDurableProducerQueueEvent : IDeliverySerializable
     {
@@ -199,28 +207,42 @@ public static class DurableProducerQueue
 
         public bool IsMessage => Message != null;
 
-        public static implicit operator MessageOrChunk<T>(T message) => new(message);
+        public static implicit operator MessageOrChunk<T>(T message)
+        {
+            return new MessageOrChunk<T>(message);
+        }
 
-        public static implicit operator T(MessageOrChunk<T> message) => message.IsMessage
-            ? message.Message!
-            : throw new InvalidCastException($"MessageOrChunk<{typeof(T).Name}> is a ChunkedMessage and is not castable to [{typeof(T)}].");
-        
-        public static implicit operator ChunkedMessage(MessageOrChunk<T> message) => message.IsMessage
-            ? throw new InvalidCastException($"MessageOrChunk<{typeof(T).Name}> is a [{typeof(T)}] and is not castable to ChunkedMessage.")
-            : message.Chunk!.Value;
+        public static implicit operator T(MessageOrChunk<T> message)
+        {
+            return message.IsMessage
+                ? message.Message!
+                : throw new InvalidCastException(
+                    $"MessageOrChunk<{typeof(T).Name}> is a ChunkedMessage and is not castable to [{typeof(T)}].");
+        }
 
-        public static implicit operator MessageOrChunk<T>(ChunkedMessage chunkedMessage) => new(chunkedMessage);
+        public static implicit operator ChunkedMessage(MessageOrChunk<T> message)
+        {
+            return message.IsMessage
+                ? throw new InvalidCastException(
+                    $"MessageOrChunk<{typeof(T).Name}> is a [{typeof(T)}] and is not castable to ChunkedMessage.")
+                : message.Chunk!.Value;
+        }
+
+        public static implicit operator MessageOrChunk<T>(ChunkedMessage chunkedMessage)
+        {
+            return new MessageOrChunk<T>(chunkedMessage);
+        }
 
         public bool Equals(MessageOrChunk<T> other)
         {
             return EqualityComparer<T?>.Default.Equals(Message, other.Message) && Nullable.Equals(Chunk, other.Chunk);
         }
-        
+
         public override bool Equals(object? obj)
         {
             if (obj is null)
                 return false;
-            
+
             switch (obj)
             {
                 case MessageOrChunk<T> other:
@@ -249,7 +271,7 @@ public static class DurableProducerQueue
     }
 
     /// <summary>
-    /// The fact that a message has been sent.
+    ///     The fact that a message has been sent.
     /// </summary>
     public sealed class MessageSent<T> : IDurableProducerQueueEvent, IEquatable<MessageSent<T>>
     {
@@ -262,24 +284,19 @@ public static class DurableProducerQueue
             Timestamp = timestamp;
         }
 
-        public SeqNo SeqNo { get; }
+        public long SeqNo { get; }
 
         public MessageOrChunk<T> Message { get; }
 
         public bool Ack { get; }
 
-        public ConfirmationQualifier Qualifier { get; }
+        public string Qualifier { get; }
 
-        public Timestamp Timestamp { get; }
+        public long Timestamp { get; }
 
         internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true };
 
         internal bool IsLastChunk => Message.Chunk is { LastChunk: true };
-
-        public MessageSent<T> WithQualifier(ConfirmationQualifier qualifier) =>
-            new(SeqNo, Message, Ack, qualifier, Timestamp);
-
-        public MessageSent<T> WithTimestamp(Timestamp timestamp) => new(SeqNo, Message, Ack, Qualifier, timestamp);
 
         public bool Equals(MessageSent<T>? other)
         {
@@ -289,9 +306,19 @@ public static class DurableProducerQueue
                    Qualifier == other.Qualifier && Timestamp == other.Timestamp;
         }
 
+        public MessageSent<T> WithQualifier(string qualifier)
+        {
+            return new MessageSent<T>(SeqNo, Message, Ack, qualifier, Timestamp);
+        }
+
+        public MessageSent<T> WithTimestamp(long timestamp)
+        {
+            return new MessageSent<T>(SeqNo, Message, Ack, Qualifier, timestamp);
+        }
+
         public override bool Equals(object? obj)
         {
-            return ReferenceEquals(this, obj) || obj is MessageSent<T> other && Equals(other);
+            return ReferenceEquals(this, obj) || (obj is MessageSent<T> other && Equals(other));
         }
 
         public override int GetHashCode()
@@ -304,16 +331,20 @@ public static class DurableProducerQueue
             return $"MessageSent({SeqNo}, {Message}, {Ack}, {Qualifier}, {Timestamp})";
         }
 
-        public static MessageSent<T> FromChunked(SeqNo seqNo, ChunkedMessage chunkedMessage, bool ack,
-            ConfirmationQualifier confirmationQualifier, Timestamp timestamp) =>
-            new(seqNo, chunkedMessage, ack, confirmationQualifier, timestamp);
+        public static MessageSent<T> FromChunked(long seqNo, ChunkedMessage chunkedMessage, bool ack,
+            string confirmationQualifier, long timestamp)
+        {
+            return new MessageSent<T>(seqNo, chunkedMessage, ack, confirmationQualifier, timestamp);
+        }
 
-        public static MessageSent<T> FromMessageOrChunked(SeqNo seqNo, MessageOrChunk<T> messageOrChunk, bool ack,
-            ConfirmationQualifier confirmationQualifier, Timestamp timestamp) =>
-            new(seqNo, messageOrChunk, ack, confirmationQualifier, timestamp);
+        public static MessageSent<T> FromMessageOrChunked(long seqNo, MessageOrChunk<T> messageOrChunk, bool ack,
+            string confirmationQualifier, long timestamp)
+        {
+            return new MessageSent<T>(seqNo, messageOrChunk, ack, confirmationQualifier, timestamp);
+        }
 
-        public void Deconstruct(out SeqNo seqNo, out MessageOrChunk<T> message, out bool ack,
-            out ConfirmationQualifier qualifier, out Timestamp timestamp)
+        public void Deconstruct(out long seqNo, out MessageOrChunk<T> message, out bool ack,
+            out string qualifier, out long timestamp)
         {
             seqNo = SeqNo;
             message = Message;
@@ -324,24 +355,23 @@ public static class DurableProducerQueue
     }
 
     /// <summary>
-    /// INTERNAL API
-    ///
-    /// The fact that a message has been confirmed to be delivered and processed.
+    ///     INTERNAL API
+    ///     The fact that a message has been confirmed to be delivered and processed.
     /// </summary>
     internal sealed class Confirmed : IDurableProducerQueueEvent
     {
-        public Confirmed(SeqNo seqNo, ConfirmationQualifier qualifier, long timestamp)
+        public Confirmed(long seqNo, string qualifier, long timestamp)
         {
             SeqNo = seqNo;
             Qualifier = qualifier;
             Timestamp = timestamp;
         }
 
-        public SeqNo SeqNo { get; }
+        public long SeqNo { get; }
 
-        public ConfirmationQualifier Qualifier { get; }
+        public string Qualifier { get; }
 
-        public Timestamp Timestamp { get; }
+        public long Timestamp { get; }
 
         public override string ToString()
         {
@@ -350,9 +380,8 @@ public static class DurableProducerQueue
     }
 
     /// <summary>
-    /// INTERNAL API
-    ///
-    /// Remove entries related to the ConfirmationQualifiers that haven't been used in a while.
+    ///     INTERNAL API
+    ///     Remove entries related to the ConfirmationQualifiers that haven't been used in a while.
     /// </summary>
     internal sealed class Cleanup : IDurableProducerQueueEvent
     {
@@ -361,7 +390,7 @@ public static class DurableProducerQueue
             ConfirmationQualifiers = confirmationQualifiers;
         }
 
-        public ISet<ConfirmationQualifier> ConfirmationQualifiers { get; }
+        public ISet<string> ConfirmationQualifiers { get; }
 
         public override string ToString()
         {
