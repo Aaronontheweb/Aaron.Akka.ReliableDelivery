@@ -17,6 +17,7 @@ using Akka.IO;
 using Akka.Pattern;
 using Akka.Serialization;
 using Akka.Util;
+using Akka.Util.Internal;
 using static Aaron.Akka.ReliableDelivery.ProducerController;
 using static Aaron.Akka.ReliableDelivery.ConsumerController;
 
@@ -349,14 +350,55 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
             if (DurableProducerQueueRef.IsEmpty)
             {
+                // TODO: optimize this with spans and slices
+                OnMsg(chunks.First(), newReplyAfterStore, chunks.Skip(1).ToImmutableList());
             }
+            else
+            {
+                var seqMsg = chunks.First();
+                StoreMessageSent(
+                    DurableProducerQueue.MessageSent<T>.FromMessageOrChunked(seqMsg.SeqNr, seqMsg.Message, seqMsg.Ack,
+                        DurableProducerQueue.NoQualifier, _timeProvider.Now.Ticks), 1);
+                
+                CurrentState = CurrentState.WithRemainingChunks(chunks)
+                    .WithReplyAfterStore(newReplyAfterStore)
+                    .WithStoreMessageSentInProgress(seqMsg.SeqNr);
+            }
+        });
+        
+        // receiving a live message without an explicit ACK target
+        Receive<SendNext<T>>(sendNext =>
+        {
+            CheckReceiveMessageRemainingChunkState();
+            var chunks = Chunk(sendNext.Message, true, _serialization.Value);
+
+            if (DurableProducerQueueRef.IsEmpty)
+            {
+                // TODO: optimize this with spans and slices
+                OnMsg(chunks.First(), CurrentState.ReplyAfterStore, chunks.Skip(1).ToImmutableList());
+            }
+            else
+            {
+                var seqMsg = chunks.First();
+                StoreMessageSent(
+                    DurableProducerQueue.MessageSent<T>.FromMessageOrChunked(seqMsg.SeqNr, seqMsg.Message, seqMsg.Ack,
+                        DurableProducerQueue.NoQualifier, _timeProvider.Now.Ticks), 1);
+                
+                CurrentState = CurrentState.WithRemainingChunks(chunks)
+                    .WithStoreMessageSentInProgress(seqMsg.SeqNr);
+            }
+        });
+
+        Receive<StoreMessageSentCompleted<T>>(completed =>
+        {
+            ReceiveStoreMessageSentCompleted(completed);
         });
 
         Receive<ResendFirst>(_ => ResendFirstMsg());
 
         Receive<T>(msg => { });
     }
-
+    
     protected override void PreStart()
     {
         DurableProducerQueueRef = AskLoadState();
@@ -504,11 +546,13 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             if (CurrentState.StoreMessageSentInProgress != 0)
             {
                 newRequested = CurrentState.Requested;
-            } else if (!CurrentState.RemainingChunks.IsEmpty)
+            }
+            else if (!CurrentState.RemainingChunks.IsEmpty)
             {
                 Self.Tell(SendChunk.Instance);
                 newRequested = CurrentState.Requested;
-            } else if (!CurrentState.Requested && (newRequestedSeqNr2 - CurrentState.RequestedSeqNr) > 0)
+            }
+            else if (!CurrentState.Requested && (newRequestedSeqNr2 - CurrentState.RequestedSeqNr) > 0)
             {
                 ReadNext();
                 newRequested = true;
@@ -542,7 +586,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         {
             ResendUnconfirmed(stateAfterAck.Unconfirmed);
         }
-        
+
         CurrentState = stateAfterAck;
     }
 
@@ -571,7 +615,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         });
     }
 
-    private Option<DurableProducerQueue.State<T>> CreateInitialState(bool hasDurableQueue)
+    private static Option<DurableProducerQueue.State<T>> CreateInitialState(bool hasDurableQueue)
     {
         if (hasDurableQueue) return Option<DurableProducerQueue.State<T>>.None;
         return Option<DurableProducerQueue.State<T>>.Create(DurableProducerQueue.State<T>.Empty);
@@ -585,7 +629,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         foreach (var u in loadedState.Unconfirmed)
         {
             unconfirmedBuilder.Add(
-                new SequencedMessage<T>(ProducerId, u.SeqNo, u.Message, i == 0, u.Ack));
+                new SequencedMessage<T>(ProducerId, u.SeqNr, u.Message, i == 0, u.Ack));
             i++;
         }
 
@@ -771,6 +815,82 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             }
         }
     }
+    
+    private void ReceiveStoreMessageSentCompleted(long seqNr)
+    {
+        if (CurrentState.StoreMessageSentInProgress == seqNr)
+        {
+            if(seqNr != CurrentState.CurrentSeqNr)
+                throw new IllegalStateException($"currentSeqNr is [{CurrentState.CurrentSeqNr}] not matching stored seqNr [{seqNr}]");
+
+            var seqMsg = CurrentState.RemainingChunks.First();
+            if(seqNr != seqMsg.SeqNr)
+                throw new IllegalStateException($"seqNr is [{seqNr}] not matching stored seqNr [{seqMsg.SeqNr}]");
+            
+            if(CurrentState.ReplyAfterStore.TryGetValue(seqNr, out var replyAfterStore))
+            {
+                if (_log.IsDebugEnabled)
+                {
+                    _log.Debug("Sending confirmation reply to [{0}] after storage", seqNr);
+                }
+                
+                replyAfterStore.Tell(seqNr);
+            }
+
+            var newReplyAfterStore = CurrentState.ReplyAfterStore.Remove(seqNr);
+            
+            OnMsg(seqMsg, newReplyAfterStore, CurrentState.RemainingChunks.Skip(1).ToImmutableList());
+        }
+        else
+        {
+            _log.Debug("Received StoreMessageSentCompleted for seqNr [{0}], but waiting for [{1}].",
+                seqNr, CurrentState.StoreMessageSentInProgress);
+        }
+    }
+
+    private void ReceiveStoreMessageSentFailed(StoreMessageSentFailed<T> f)
+    {
+        if (f.MessageSent.SeqNr == CurrentState.StoreMessageSentInProgress)
+        {
+            if(f.Attempt >= Settings.DurableQueueAttemptRetries)
+            {
+                var errorMessage = $"StoreMessageSentFailed for seqNr [{f.MessageSent.SeqNr}] after [{f.Attempt}] attempts, giving up.";
+                _log.Error(errorMessage);
+                throw new TimeoutException(errorMessage);
+            }
+            else
+            {
+                _log.Warning("StoreMessageSentFailed for seqNr [{0}], attempt [{1}] of [{2}], retrying.", f.MessageSent.SeqNr, f.Attempt, Settings.DurableQueueAttemptRetries);
+                
+                // retry
+                if (f.MessageSent.IsFirstChunk)
+                {
+                    StoreMessageSent(f.MessageSent, f.Attempt + 1);
+                }
+                else
+                {
+                    /* store all chunks again, because partially stored chunks are discarded by the DurableQueue
+                     * when it's restarted.
+                     */
+                    var unconfirmedReverse = CurrentState.Unconfirmed.Reverse().ToImmutableList();
+                    var xs = unconfirmedReverse.TakeWhile(x => !x.IsFirstChunk).ToImmutableList();
+                    if (unconfirmedReverse.Count == xs.Count)
+                    {
+                        throw new IllegalStateException(
+                            $"First chunk not found in unconfirmed[{string.Join(",", CurrentState.Unconfirmed)}]");
+                    }
+
+                    var firstChunk = unconfirmedReverse.Skip(xs.Count).First();
+                    var remainingChunks = ImmutableList.CreateBuilder<SequencedMessage<T>>();
+                    remainingChunks.Add(firstChunk);
+                    remainingChunks.AddRange(xs.Reverse());
+                    remainingChunks.AddRange(CurrentState.RemainingChunks);
+                    var newUnconfirmed = CurrentState.Unconfirmed[^xs.Count - 1];
+                }
+            }
+        }
+    }
+
 
     private void StoreMessageSent(DurableProducerQueue.MessageSent<T> messageSent, int attempt)
     {
