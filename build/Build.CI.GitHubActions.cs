@@ -1,8 +1,10 @@
-﻿// Copyright 2021 Maintainers of NUKE.
-// Distributed under the MIT License.
-// https://github.com/nuke-build/nuke/blob/master/LICENSE
+﻿// -----------------------------------------------------------------------
+//  <copyright file="Build.CI.GitHubActions.cs" company="Akka.NET Project">
+//      Copyright (C) 2009-2023 Lightbend Inc. <http://www.lightbend.com>
+//      Copyright (C) 2013-2023 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//  </copyright>
+// -----------------------------------------------------------------------
 
-using System;
 using System.Collections.Generic;
 using Nuke.Common.CI.GitHubActions;
 using Nuke.Common.CI.GitHubActions.Configuration;
@@ -19,37 +21,36 @@ using Nuke.Common.Utilities;
     PublishArtifacts = true,
     EnableGitHubToken = true)
 ]
-
 [CustomGitHubActions("Windows_release",
     GitHubActionsImage.WindowsLatest,
     OnPushTags = new[] { "*" },
     AutoGenerate = false,
     InvokedTargets = new[] { nameof(NuGet) },
-    ImportSecrets = new[] { "Nuget_Key"},
+    ImportSecrets = new[] { "Nuget_Key" },
     PublishArtifacts = true,
     EnableGitHubToken = true)
 ]
-
 partial class Build
 {
 }
+
 class CustomGitHubActionsAttribute : GitHubActionsAttribute
 {
-    public CustomGitHubActionsAttribute(string name, GitHubActionsImage image, params GitHubActionsImage[] images) : base(name, image, images)
+    public CustomGitHubActionsAttribute(string name, GitHubActionsImage image, params GitHubActionsImage[] images) :
+        base(name, image, images)
     {
     }
 
-    protected override GitHubActionsJob GetJobs(GitHubActionsImage image, IReadOnlyCollection<ExecutableTarget> relevantTargets)
+    protected override GitHubActionsJob GetJobs(GitHubActionsImage image,
+        IReadOnlyCollection<ExecutableTarget> relevantTargets)
     {
         var job = base.GetJobs(image, relevantTargets);
         var newSteps = new List<GitHubActionsStep>(job.Steps);
         foreach (var version in new[] { "6.0.*" })
-        {
             newSteps.Insert(1, new GitHubActionsSetupDotNetStep
             {
                 Version = version
             });
-        }
         newSteps.Insert(1, new GitHubActionsSetupChmod
         {
             File = "build.cmd"

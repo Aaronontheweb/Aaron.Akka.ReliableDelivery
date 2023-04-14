@@ -1,18 +1,10 @@
 ﻿// -----------------------------------------------------------------------
-//  <copyright file="Program.cs" company="Akka.NET Project">
+//  <copyright file="Friends.cs" company="Akka.NET Project">
 //      Copyright (C) 2009-2023 Lightbend Inc. <http://www.lightbend.com>
 //      Copyright (C) 2013-2023 .NET Foundation <https://github.com/akkadotnet/akka.net>
 //  </copyright>
 // -----------------------------------------------------------------------
 
-using NBench;
+using System.Runtime.CompilerServices;
 
-namespace Aaron.Akka.ReliableDelivery.Tests.Performance;
-
-internal class Program
-{
-    private static int Main(string[] args)
-    {
-        return NBenchRunner.Run<Program>();
-    }
-}
+[assembly: InternalsVisibleTo("Aaron.Akka.ReliableDelivery.Tests")]
