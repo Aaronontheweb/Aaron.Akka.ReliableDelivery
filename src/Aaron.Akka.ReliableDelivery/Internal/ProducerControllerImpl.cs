@@ -32,13 +32,13 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     /// <summary>
     ///     Default send function for when none are specified.
     /// </summary>
-    private static readonly Func<ConsumerController.SequencedMessage<T>, object> DefaultSend = message => message;
+    private static readonly Func<SequencedMessage<T>, object> DefaultSend = message => message;
 
-    private readonly Channel<ProducerController.SendNext<T>> _channel;
+    private readonly Channel<SendNext<T>> _channel;
 
     private readonly ILoggingAdapter _log = Context.GetLogger();
 
-    private readonly Func<ConsumerController.SequencedMessage<T>, object> _sendAdapter;
+    private readonly Func<SequencedMessage<T>, object> _sendAdapter;
     private readonly Lazy<Serialization> _serialization = new(() => Context.System.Serialization);
     private readonly CancellationTokenSource _shutdownCancellation = new();
     private readonly Option<Props> _durableProducerQueueProps;
@@ -405,8 +405,16 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         Receive<Resend>(resend => ReceiveResend(resend.FromSeqNr));
 
         Receive<ResendFirst>(_ => ResendFirstMsg());
+        
+        Receive<ResendFirstUnconfirmed>(_ => ReceiveResendFirstUnconfirmed());
 
-        Receive<T>(msg => { });
+        Receive<ProducerController.Start<T>>(ReceiveStart);
+        
+        Receive<RegisterConsumer<T>>(c => ReceiveRegisterConsumer(c.ConsumerController));
+        
+        Receive<DurableQueueTerminated>(terminated => throw new IllegalStateException("DurableQueue was unexpectedly terminated."));
+        
+        ReceiveAny(_ => throw new InvalidOperationException($"Unexpected message: {_.GetType()}"));
     }
 
     protected override void PreStart()
@@ -634,7 +642,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     private State CreateState(IActorRef producer, IActorRef consumerController,
         DurableProducerQueue.State<T> loadedState)
     {
-        var unconfirmedBuilder = ImmutableList.CreateBuilder<ConsumerController.SequencedMessage<T>>();
+        var unconfirmedBuilder = ImmutableList.CreateBuilder<SequencedMessage<T>>();
         var i = 0;
         foreach (var u in loadedState.Unconfirmed)
         {
