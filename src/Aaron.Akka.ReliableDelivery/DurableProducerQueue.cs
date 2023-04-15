@@ -122,13 +122,13 @@ public static class DurableProducerQueue
 
         public State<T> AddMessageSent(MessageSent<T> messageSent)
         {
-            return new State<T>(messageSent.SeqNo + 1, HighestConfirmedSeqNo,
+            return new State<T>(messageSent.SeqNr + 1, HighestConfirmedSeqNo,
                 ConfirmedSeqNr, Unconfirmed.Add(messageSent));
         }
 
         public State<T> AddConfirmed(long seqNo, string qualifier, long timestamp)
         {
-            var newUnconfirmed = Unconfirmed.Where(c => !(c.SeqNo <= seqNo && c.Qualifier == qualifier))
+            var newUnconfirmed = Unconfirmed.Where(c => !(c.SeqNr <= seqNo && c.Qualifier == qualifier))
                 .ToImmutableList();
 
             return new State<T>(CurrentSeqNo, Math.Max(HighestConfirmedSeqNo, seqNo),
@@ -157,7 +157,7 @@ public static class DurableProducerQueue
                 {
                     tmp.Clear();
                     newUnconfirmed.Add(u);
-                    newCurrentSeqNr = u.SeqNo + 1;
+                    newCurrentSeqNr = u.SeqNr + 1;
                 }
                 else if (u is { IsFirstChunk: true, IsLastChunk: false })
                 {
@@ -172,7 +172,7 @@ public static class DurableProducerQueue
                 {
                     newUnconfirmed.AddRange(tmp.ToImmutable());
                     newUnconfirmed.Add(u);
-                    newCurrentSeqNr = u.SeqNo + 1;
+                    newCurrentSeqNr = u.SeqNr + 1;
                     tmp.Clear();
                 }
 
@@ -187,104 +187,21 @@ public static class DurableProducerQueue
     {
     }
 
-    public readonly struct MessageOrChunk<T> : IEquatable<MessageOrChunk<T>>
-    {
-        public MessageOrChunk(T message)
-        {
-            Message = message;
-            Chunk = null;
-        }
-
-        public MessageOrChunk(ChunkedMessage chunkedMessage)
-        {
-            Message = default;
-            Chunk = chunkedMessage;
-        }
-
-        public T? Message { get; }
-
-        public ChunkedMessage? Chunk { get; }
-
-        public bool IsMessage => Message != null;
-
-        public static implicit operator MessageOrChunk<T>(T message)
-        {
-            return new MessageOrChunk<T>(message);
-        }
-
-        public static implicit operator T(MessageOrChunk<T> message)
-        {
-            return message.IsMessage
-                ? message.Message!
-                : throw new InvalidCastException(
-                    $"MessageOrChunk<{typeof(T).Name}> is a ChunkedMessage and is not castable to [{typeof(T)}].");
-        }
-
-        public static implicit operator ChunkedMessage(MessageOrChunk<T> message)
-        {
-            return message.IsMessage
-                ? throw new InvalidCastException(
-                    $"MessageOrChunk<{typeof(T).Name}> is a [{typeof(T)}] and is not castable to ChunkedMessage.")
-                : message.Chunk!.Value;
-        }
-
-        public static implicit operator MessageOrChunk<T>(ChunkedMessage chunkedMessage)
-        {
-            return new MessageOrChunk<T>(chunkedMessage);
-        }
-
-        public bool Equals(MessageOrChunk<T> other)
-        {
-            return EqualityComparer<T?>.Default.Equals(Message, other.Message) && Nullable.Equals(Chunk, other.Chunk);
-        }
-
-        public override bool Equals(object? obj)
-        {
-            if (obj is null)
-                return false;
-
-            switch (obj)
-            {
-                case MessageOrChunk<T> other:
-                    return Equals(other);
-                case T msg when IsMessage:
-                    return EqualityComparer<T>.Default.Equals(Message!, msg);
-                case ChunkedMessage chunk when !IsMessage:
-                    return Chunk!.Equals(chunk);
-                default:
-                    return false;
-            }
-        }
-
-        public override int GetHashCode()
-        {
-            unchecked
-            {
-                return (EqualityComparer<T?>.Default.GetHashCode(Message) * 397) ^ Chunk.GetHashCode();
-            }
-        }
-
-        public override string ToString()
-        {
-            return IsMessage ? $"Message: {Message}" : $"Chunk: {Chunk}";
-        }
-    }
-
     /// <summary>
     ///     The fact that a message has been sent.
     /// </summary>
     public sealed class MessageSent<T> : IDurableProducerQueueEvent, IEquatable<MessageSent<T>>
     {
-        public MessageSent(long seqNo, MessageOrChunk<T> message, bool ack, string qualifier, long timestamp)
+        public MessageSent(long seqNr, MessageOrChunk<T> message, bool ack, string qualifier, long timestamp)
         {
-            SeqNo = seqNo;
+            SeqNr = seqNr;
             Message = message;
             Ack = ack;
             Qualifier = qualifier;
             Timestamp = timestamp;
         }
 
-        public long SeqNo { get; }
+        public long SeqNr { get; }
 
         public MessageOrChunk<T> Message { get; }
 
@@ -302,18 +219,18 @@ public static class DurableProducerQueue
         {
             if (ReferenceEquals(null, other)) return false;
             if (ReferenceEquals(this, other)) return true;
-            return SeqNo == other.SeqNo && Message.Equals(other.Message) && Ack == other.Ack &&
+            return SeqNr == other.SeqNr && Message.Equals(other.Message) && Ack == other.Ack &&
                    Qualifier == other.Qualifier && Timestamp == other.Timestamp;
         }
 
         public MessageSent<T> WithQualifier(string qualifier)
         {
-            return new MessageSent<T>(SeqNo, Message, Ack, qualifier, Timestamp);
+            return new MessageSent<T>(SeqNr, Message, Ack, qualifier, Timestamp);
         }
 
         public MessageSent<T> WithTimestamp(long timestamp)
         {
-            return new MessageSent<T>(SeqNo, Message, Ack, Qualifier, timestamp);
+            return new MessageSent<T>(SeqNr, Message, Ack, Qualifier, timestamp);
         }
 
         public override bool Equals(object? obj)
@@ -323,12 +240,12 @@ public static class DurableProducerQueue
 
         public override int GetHashCode()
         {
-            return SeqNo.GetHashCode();
+            return SeqNr.GetHashCode();
         }
 
         public override string ToString()
         {
-            return $"MessageSent({SeqNo}, {Message}, {Ack}, {Qualifier}, {Timestamp})";
+            return $"MessageSent({SeqNr}, {Message}, {Ack}, {Qualifier}, {Timestamp})";
         }
 
         public static MessageSent<T> FromChunked(long seqNo, ChunkedMessage chunkedMessage, bool ack,
@@ -346,7 +263,7 @@ public static class DurableProducerQueue
         public void Deconstruct(out long seqNo, out MessageOrChunk<T> message, out bool ack,
             out string qualifier, out long timestamp)
         {
-            seqNo = SeqNo;
+            seqNo = SeqNr;
             message = Message;
             ack = Ack;
             qualifier = Qualifier;

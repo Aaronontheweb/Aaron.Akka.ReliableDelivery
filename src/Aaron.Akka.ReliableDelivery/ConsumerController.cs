@@ -35,37 +35,6 @@ public static class ConsumerController
         public IActorRef Consumer { get; }
     }
 
-    public readonly struct MessageOrChunk<T>
-    {
-        public MessageOrChunk(T message)
-        {
-            Message = message;
-            Chunk = null;
-        }
-
-        public MessageOrChunk(ChunkedMessage chunkedMessage)
-        {
-            Message = default;
-            Chunk = chunkedMessage;
-        }
-
-        public T? Message { get; }
-
-        public ChunkedMessage? Chunk { get; }
-
-        public bool IsMessage => Message != null;
-
-        public static implicit operator MessageOrChunk<T>(T message)
-        {
-            return new MessageOrChunk<T>(message);
-        }
-
-        public static implicit operator MessageOrChunk<T>(ChunkedMessage chunkedMessage)
-        {
-            return new MessageOrChunk<T>(chunkedMessage);
-        }
-    }
-
     /// <summary>
     ///     A sequenced message that is delivered to the consumer via the ProducerController.
     /// </summary>
