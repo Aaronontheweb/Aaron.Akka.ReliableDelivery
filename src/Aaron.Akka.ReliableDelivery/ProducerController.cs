@@ -159,6 +159,26 @@ public static class ProducerController
     internal interface IInternalCommand
     {
     }
+
+    internal sealed class Resend : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression
+    {
+        public Resend(long fromSeqNr)
+        {
+            FromSeqNr = fromSeqNr;
+        }
+
+        public long FromSeqNr { get; }
+    }
+    
+    internal sealed class Ack : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression
+    {
+        public Ack(long confirmedSeqNr)
+        {
+            ConfirmedSeqNr = confirmedSeqNr;
+        }
+
+        public long ConfirmedSeqNr { get; }
+    }
     
     
     /// <summary>
@@ -188,13 +208,14 @@ public static class ProducerController
     /// <summary>
     ///     Sent by the ConsumerController to the ProducerController to request the next messages in the buffer.
     /// </summary>
-    internal readonly struct Request : IInternalCommand, IDeadLetterSuppression, IDeliverySerializable
+    internal sealed class Request : IInternalCommand, IDeadLetterSuppression, IDeliverySerializable
     {
-        public Request(long confirmedSeqNo, long requestUpToSeqNo, bool supportResend)
+        public Request(long confirmedSeqNo, long requestUpToSeqNo, bool supportResend, bool viaTimeout)
         {
             ConfirmedSeqNo = confirmedSeqNo;
             RequestUpToSeqNo = requestUpToSeqNo;
             SupportResend = supportResend;
+            ViaTimeout = viaTimeout;
 
             // assert that ConfirmedSeqNo <= RequestUpToSeqNo by throwing an ArgumentOutOfRangeException
             if (ConfirmedSeqNo > RequestUpToSeqNo)
@@ -216,6 +237,8 @@ public static class ProducerController
         ///     Set to <c>false </c> in pull-mode.
         /// </summary>
         public bool SupportResend { get; }
+        
+        public bool ViaTimeout { get; }
     }
 
     internal sealed class LoadStateReply<T> : IInternalCommand
