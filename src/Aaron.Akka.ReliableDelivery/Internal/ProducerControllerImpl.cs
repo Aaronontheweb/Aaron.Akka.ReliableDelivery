@@ -17,7 +17,6 @@ using Akka.IO;
 using Akka.Pattern;
 using Akka.Serialization;
 using Akka.Util;
-using Akka.Util.Internal;
 using static Aaron.Akka.ReliableDelivery.ProducerController;
 using static Aaron.Akka.ReliableDelivery.ConsumerController;
 
@@ -53,14 +52,14 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         _durableProducerQueueProps = durableProducerQueue;
         _timeProvider = timeProvider ?? DateTimeOffsetNowTimeProvider.Instance;
         _sendAdapter = sendAdapter ?? DefaultSend;
-        _channel = Channel.CreateBounded<ProducerController.SendNext<T>>(
+        _channel = Channel.CreateBounded<SendNext<T>>(
             new BoundedChannelOptions(Settings.DeliveryBufferSize)
             {
                 SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
             }); // force busy producers to wait
 
         // this state gets overridden during the loading sequence, so it's not used at all really
-        CurrentState = new State(false, 0, 0, 0, true, 0, ImmutableList<ConsumerController.SequencedMessage<T>>.Empty,
+        CurrentState = new State(false, 0, 0, 0, true, 0, ImmutableList<SequencedMessage<T>>.Empty,
             ActorRefs.NoSender, ImmutableList<SequencedMessage<T>>.Empty,
             ImmutableDictionary<long, IActorRef>.Empty, _ => { }, 0);
 
