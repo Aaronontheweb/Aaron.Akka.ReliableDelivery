@@ -12,7 +12,6 @@ using System.Text;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Event;
-using Akka.IO;
 using Akka.Serialization;
 
 namespace Aaron.Akka.ReliableDelivery.Tests;
@@ -41,6 +40,8 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
         EndCondition = endCondition;
         EndReplyTo = endReplyTo;
         ConsumerController = consumerController;
+        
+        Active();
     }
 
     private void Active()
@@ -162,7 +163,7 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
         IActorRef consumerController) =>
         Props.Create(() => new TestConsumer(delay, endCondition, endReplyTo, consumerController));
 
-    public ITimerScheduler Timers { get; set; }
+    public ITimerScheduler Timers { get; set; } = null!;
 }
 
 /// <summary>

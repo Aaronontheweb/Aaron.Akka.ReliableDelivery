@@ -6,19 +6,10 @@
 // -----------------------------------------------------------------------
 
 using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Linq;
-using System.Threading;
 using System.Threading.Channels;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Event;
-using Akka.IO;
-using Akka.Pattern;
-using Akka.Serialization;
-using Akka.Util;
-using Microsoft.Extensions.ObjectPool;
 
 namespace Aaron.Akka.ReliableDelivery;
 
