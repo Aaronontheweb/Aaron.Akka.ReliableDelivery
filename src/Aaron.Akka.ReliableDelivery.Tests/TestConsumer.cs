@@ -8,8 +8,12 @@
 using System;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Text;
 using Akka.Actor;
+using Akka.Configuration;
 using Akka.Event;
+using Akka.IO;
+using Akka.Serialization;
 
 namespace Aaron.Akka.ReliableDelivery.Tests;
 
@@ -159,4 +163,47 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
         Props.Create(() => new TestConsumer(delay, endCondition, endReplyTo, consumerController));
 
     public ITimerScheduler Timers { get; set; }
+}
+
+/// <summary>
+/// INTERNAL API
+/// </summary>
+public sealed class TestSerializer : SerializerWithStringManifest
+{
+    public static readonly Config Config = ConfigurationFactory.ParseString(@"
+        akka.actor {
+            serializers {
+                delivery-test = ""Aaron.Akka.ReliableDelivery.Tests.TestSerializer, Aaron.Akka.ReliableDelivery.Tests""
+            }
+            serialization-bindings {
+                ""Aaron.Akka.ReliableDelivery.Tests.TestConsumer+Job"" = delivery-test
+            }
+        }");
+    
+    public TestSerializer(ExtendedActorSystem system) : base(system)
+    {
+    }
+
+    public override byte[] ToBinary(object obj)
+    {
+        switch (obj)
+        {
+            case TestConsumer.Job job:
+                return Encoding.UTF8.GetBytes(job.Payload);
+            default:
+                throw new ArgumentException($"Can't serialize object of type [{obj.GetType()}]");`
+        }
+    }
+
+    public override object FromBinary(byte[] bytes, string manifest)
+    {
+        return new TestConsumer.Job(Encoding.UTF8.GetString(bytes));
+    }
+
+    public override string Manifest(object o)
+    {
+        return string.Empty;
+    }
+    
+    public override int Identifier => 787878;
 }
