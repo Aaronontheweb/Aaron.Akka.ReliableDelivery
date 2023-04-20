@@ -191,7 +191,7 @@ public sealed class TestSerializer : SerializerWithStringManifest
             case TestConsumer.Job job:
                 return Encoding.UTF8.GetBytes(job.Payload);
             default:
-                throw new ArgumentException($"Can't serialize object of type [{obj.GetType()}]");`
+                throw new ArgumentException($"Can't serialize object of type [{obj.GetType()}]");
         }
     }
 
