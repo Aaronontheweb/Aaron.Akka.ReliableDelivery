@@ -86,11 +86,6 @@ public static class ConsumerController
 
         public string ProducerId { get; }
         public T Message { get; }
-
-        /// <summary>
-        ///     Creates a confirmation message that can be sent back to the producer.
-        /// </summary>
-        public Confirmed<T> Confirmation => new(ProducerId, SeqNr);
     }
 
     /// <summary>
