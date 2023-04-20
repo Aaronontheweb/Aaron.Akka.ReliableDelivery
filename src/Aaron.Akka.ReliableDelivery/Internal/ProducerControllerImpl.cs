@@ -33,8 +33,6 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     /// </summary>
     private static readonly Func<SequencedMessage<T>, object> DefaultSend = message => message;
 
-    private readonly Channel<SendNext<T>> _channel;
-
     private readonly ILoggingAdapter _log = Context.GetLogger();
 
     private readonly Func<SequencedMessage<T>, object> _sendAdapter;
@@ -52,7 +50,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         _durableProducerQueueProps = durableProducerQueue;
         _timeProvider = timeProvider ?? DateTimeOffsetNowTimeProvider.Instance;
         _sendAdapter = sendAdapter ?? DefaultSend;
-        _channel = Channel.CreateBounded<SendNext<T>>(
+        _channel = Channel.CreateBounded<RequestNext<T>>(
             new BoundedChannelOptions(Settings.DeliveryBufferSize)
             {
                 SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
@@ -263,9 +261,6 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             AssertLocalProducer(start.Producer);
             CurrentState = CurrentState.WithProducer(start.Producer);
 
-            // send ChannelWriter<T> to producer
-            CurrentState.Producer.Tell(new StartProduction<T>(ProducerId, _channel.Writer));
-
             if (IsReadyForActivation())
                 BecomeActive(CreateState(start.Producer, consumerController, initialState.Value));
         });
@@ -316,7 +311,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         {
             requested = true;
 
-            ReadNext();
+            CurrentState.Producer.Tell(new RequestNext<T>(ProducerId, 1L, 0, Self));
         }
         else // will only be true if we've loaded our state from persistence
         {
@@ -330,22 +325,15 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         Become(Active);
     }
 
-    private void ReadNext()
-    {
-        // kick off read task
-        var self = Self;
-        _channel.Reader.ReadAsync(ShutdownToken).PipeTo(self);
-    }
-
     private void Active()
     {
         // receiving a live message with an explicit ACK target
-        Receive<SendNext<T>>(next => !next.SendConfirmationTo.IsNobody(), sendNext =>
+        Receive<RequestNext<T>>(next => !next.SendNextTo.IsNobody(), sendNext =>
         {
             CheckReceiveMessageRemainingChunkState();
             var chunks = Chunk(sendNext.Message, true, _serialization.Value);
             var newReplyAfterStore =
-                CurrentState.ReplyAfterStore.SetItem(chunks.Last().SeqNr, sendNext.SendConfirmationTo!);
+                CurrentState.ReplyAfterStore.SetItem(chunks.Last().SeqNr, sendNext.SendNextTo!);
 
             if (DurableProducerQueueRef.IsEmpty)
             {
@@ -366,7 +354,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         });
 
         // receiving a live message without an explicit ACK target
-        Receive<SendNext<T>>(sendNext =>
+        Receive<RequestNext<T>>(sendNext =>
         {
             CheckReceiveMessageRemainingChunkState();
             var chunks = Chunk(sendNext.Message, true, _serialization.Value);

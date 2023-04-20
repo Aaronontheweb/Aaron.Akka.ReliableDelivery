@@ -47,7 +47,7 @@ public class ProducerControllerSpec : TestKit
         var outputChannel = startProduction.Writer;
         
         // act
-        await outputChannel.WriteAsync(new ProducerController.SendNext<TestConsumer.Job>(new TestConsumer.Job("msg-1"), ActorRefs.NoSender));
+        await outputChannel.WriteAsync(new ProducerController.RequestNext<TestConsumer.Job>(new TestConsumer.Job("msg-1"), ActorRefs.NoSender));
         var seqMsg = await consumerProbe.ExpectMsgAsync<ConsumerController.SequencedMessage<TestConsumer.Job>>();
         
         // assert

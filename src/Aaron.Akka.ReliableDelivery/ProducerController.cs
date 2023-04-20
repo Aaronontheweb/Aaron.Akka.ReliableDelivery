@@ -7,6 +7,7 @@
 
 using System;
 using System.Threading.Channels;
+using System.Threading.Tasks;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Configuration;
@@ -124,41 +125,39 @@ public static class ProducerController
     }
 
     /// <summary>
-    ///     Message send back to the producer in response to a <see cref="Start{T}" /> command.
-    /// </summary>
-    public sealed class StartProduction<T> : IProducerCommand<T>, INoSerializationVerificationNeeded
-    {
-        public StartProduction(string producerId, ChannelWriter<SendNext<T>> writer)
-        {
-            ProducerId = producerId;
-            Writer = writer;
-        }
-
-        public string ProducerId { get; }
-
-        public ChannelWriter<SendNext<T>> Writer { get; }
-    }
-
-    /// <summary>
     ///     A send instruction sent from Producers to Consumers.
     /// </summary>
-    public sealed class SendNext<T> : IProducerCommand<T>, INoSerializationVerificationNeeded
+    public sealed class RequestNext<T> : IProducerCommand<T>, INoSerializationVerificationNeeded
     {
-        public SendNext(T message, IActorRef? sendConfirmationTo)
+        public RequestNext(string producerId, long currentSeqNr, long confirmedSeqNr, IActorRef sendNextTo)
         {
-            Message = message;
-            SendConfirmationTo = sendConfirmationTo;
+            ProducerId = producerId;
+            CurrentSeqNr = currentSeqNr;
+            ConfirmedSeqNr = confirmedSeqNr;
+            SendNextTo = sendNextTo;
         }
 
         /// <summary>
         ///     The message that will actually be delivered to consumers.
         /// </summary>
-        public T Message { get; }
+        public string ProducerId { get; }
+        
+        /// <summary>
+        /// The current seqNr being handled by the producer controller.
+        /// </summary>
+        public long CurrentSeqNr { get; }
+        
+        /// <summary>
+        /// The highest confirmed seqNr observed by the producer controller.
+        /// </summary>
+        public long ConfirmedSeqNr { get; }
 
         /// <summary>
         ///     If this field is populated, confirmation messages containing the current SeqNo (long) will be sent to this actor.
         /// </summary>
-        public IActorRef? SendConfirmationTo { get; }
+        public IActorRef SendNextTo { get; }
+        
+        // TODO: askNextTo
     }
 
     /// <summary>

@@ -69,7 +69,7 @@ public class TestProducer : ReceiveActor, IWithTimers
         });
     }
 
-    private void ActiveNoDelay(ChannelWriter<ProducerController.SendNext<TestConsumer.Job>> writer)
+    private void ActiveNoDelay(ChannelWriter<ProducerController.RequestNext<TestConsumer.Job>> writer)
     {
         // no ticks in this behavior
         ReceiveAsync<WriteNext>(async _ =>
@@ -80,7 +80,7 @@ public class TestProducer : ReceiveActor, IWithTimers
         });
     }
     
-    private void Active(ChannelWriter<ProducerController.SendNext<TestConsumer.Job>> writer)
+    private void Active(ChannelWriter<ProducerController.RequestNext<TestConsumer.Job>> writer)
     {
         Receive<Tick>(_ =>
         {
@@ -104,10 +104,10 @@ public class TestProducer : ReceiveActor, IWithTimers
         });
     }
 
-    private ProducerController.SendNext<TestConsumer.Job> CreateMessage(int n)
+    private ProducerController.RequestNext<TestConsumer.Job> CreateMessage(int n)
     {
         var msg = $"msg-{n}";
         _log.Info("Sent [{0}]", n);
-        return new ProducerController.SendNext<TestConsumer.Job>(new TestConsumer.Job(msg), ActorRefs.NoSender);
+        return new ProducerController.RequestNext<TestConsumer.Job>(new TestConsumer.Job(msg), ActorRefs.NoSender);
     }
 }
