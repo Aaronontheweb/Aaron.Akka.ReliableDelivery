@@ -11,5 +11,5 @@ namespace Aaron.Akka.ReliableDelivery.Internal;
 
 public static class RdConfig
 {
-    public static Config DefaultConfig() => ConfigurationFactory.FromResource<ProducerController.Settings>("Aaron.Akka.ReliableDelivery.reference.conf");
+    public static Config DefaultConfig() => ConfigurationFactory.FromResource<ChunkedMessage>("Aaron.Akka.ReliableDelivery.delivery.conf");
 }

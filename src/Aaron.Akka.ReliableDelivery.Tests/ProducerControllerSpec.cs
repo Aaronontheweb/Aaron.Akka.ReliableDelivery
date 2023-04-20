@@ -6,8 +6,12 @@
 // -----------------------------------------------------------------------
 
 using System.Threading.Tasks;
+using Aaron.Akka.ReliableDelivery.Internal;
+using Akka.Actor;
 using Akka.Configuration;
 using Akka.TestKit.Xunit2;
+using Akka.Util;
+using FluentAssertions;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -17,7 +21,7 @@ public class ProducerControllerSpec : TestKit
 {
     private static readonly Config Config = "akka.reliable-delivery.consumer-controller.flow-control-window = 20";
 
-    public ProducerControllerSpec(ITestOutputHelper output) : base(Config.WithFallback(TestSerializer.Config), output: output)
+    public ProducerControllerSpec(ITestOutputHelper output) : base(Config.WithFallback(TestSerializer.Config).WithFallback(RdConfig.DefaultConfig()), output: output)
     {
         
     }
@@ -33,8 +37,22 @@ public class ProducerControllerSpec : TestKit
         // arrange
         NextId();
         var consumerProbe = CreateTestProbe();
+
+        var producerController = Sys.ActorOf(ProducerController.PropsFor<TestConsumer.Job>(ProducerId, Option<Props>.None), $"producerController-{_idCount}");
+        var producerProbe = CreateTestProbe();
+        producerController.Tell(new ProducerController.Start<TestConsumer.Job>(producerProbe.Ref));
+        producerController.Tell(new ProducerController.RegisterConsumer<TestConsumer.Job>(consumerProbe.Ref));
+
+        var startProduction = await producerProbe.ExpectMsgAsync<ProducerController.StartProduction<TestConsumer.Job>>();
+        var outputChannel = startProduction.Writer;
         
-        //var producerControllerProps = ProducerController.PropsFor<TestConsumer.Job>(ProducerId, )
+        // act
+        await outputChannel.WriteAsync(new ProducerController.SendNext<TestConsumer.Job>(new TestConsumer.Job("msg-1"), ActorRefs.NoSender));
+        var seqMsg = await consumerProbe.ExpectMsgAsync<ConsumerController.SequencedMessage<TestConsumer.Job>>();
+        
+        // assert
+        seqMsg.ProducerId.Should().Be(ProducerId);
+        seqMsg.SeqNr.Should().Be(1);
     }
 
 }

@@ -37,7 +37,7 @@ public static class ProducerController
 
         public static Settings Create(ActorSystem actorSystem)
         {
-            return Create(actorSystem.Settings.Config.GetConfig("aaron.akka.reliable-delivery.producer-controller")!);
+            return Create(actorSystem.Settings.Config.GetConfig("akka.reliable-delivery.producer-controller")!);
         }
 
         public static Settings Create(Config config)

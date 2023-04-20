@@ -10,5 +10,10 @@
         <PackageReference Include="Akka.Streams" />
     </ItemGroup>
 
+    <ItemGroup>
+      <None Remove="delivery.conf" />
+      <EmbeddedResource Include="delivery.conf" />
+    </ItemGroup>
+
 
 </Project>
