@@ -10,12 +10,5 @@
         <PackageReference Include="Akka.Streams" />
     </ItemGroup>
 
-    <ItemGroup>
-      <Compile Remove="DurableProducerQueue.cs" />
-      <EmbeddedResource Include="DurableProducerQueue.cs">
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </EmbeddedResource>
-    </ItemGroup>
-
 
 </Project>

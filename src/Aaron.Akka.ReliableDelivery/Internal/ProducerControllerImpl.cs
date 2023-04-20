@@ -48,7 +48,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         Func<SequencedMessage<T>, object>? sendAdapter = null)
     {
         ProducerId = producerId;
-        Settings = settings;
+        Settings = settings ?? ProducerController.Settings.Create(Context.System);
         _durableProducerQueueProps = durableProducerQueue;
         _timeProvider = timeProvider ?? DateTimeOffsetNowTimeProvider.Instance;
         _sendAdapter = sendAdapter ?? DefaultSend;
@@ -287,7 +287,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
         Receive<LoadStateFailed>(failed =>
         {
-            if (failed.Attempts > Settings.DurableQueueAttemptRetries)
+            if (failed.Attempts > Settings.DurableQueueRetryAttempts)
             {
                 var errorMessage = $"LoadState failed after [{failed.Attempts}] attempts. Giving up.";
                 _log.Error(errorMessage);
@@ -296,7 +296,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             else
             {
                 _log.Warning("LoadState failed, attempt [{0}] of [{1}], retrying", failed.Attempts,
-                    Settings.DurableQueueAttemptRetries);
+                    Settings.DurableQueueRetryAttempts);
                 // retry
                 AskLoadState(DurableProducerQueueRef, failed.Attempts + 1);
             }
@@ -870,7 +870,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     {
         if (f.MessageSent.SeqNr == CurrentState.StoreMessageSentInProgress)
         {
-            if (f.Attempt >= Settings.DurableQueueAttemptRetries)
+            if (f.Attempt >= Settings.DurableQueueRetryAttempts)
             {
                 var errorMessage =
                     $"StoreMessageSentFailed for seqNr [{f.MessageSent.SeqNr}] after [{f.Attempt}] attempts, giving up.";
@@ -880,7 +880,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             else
             {
                 _log.Warning("StoreMessageSentFailed for seqNr [{0}], attempt [{1}] of [{2}], retrying.",
-                    f.MessageSent.SeqNr, f.Attempt, Settings.DurableQueueAttemptRetries);
+                    f.MessageSent.SeqNr, f.Attempt, Settings.DurableQueueRetryAttempts);
 
                 // retry
                 if (f.MessageSent.IsFirstChunk)

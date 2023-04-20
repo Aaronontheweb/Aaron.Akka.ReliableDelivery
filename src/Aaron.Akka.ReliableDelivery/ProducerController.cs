@@ -9,6 +9,7 @@ using System;
 using System.Threading.Channels;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
+using Akka.Configuration;
 using Akka.Event;
 using Akka.Util;
 
@@ -23,16 +24,10 @@ public static class ProducerController
                 $"Producer [{producer}] must be local");
     }
 
-    public static Props PropsFor<T>(string producerId, Option<Props> durableProducerQueue, Settings settings,
+    public static Props PropsFor<T>(string producerId, Option<Props> durableProducerQueue, Settings? settings = null,
         Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
     {
-        return Props.Create(() => new ProducerController<T>(producerId, settings, Option<Props>.None, DateTimeOffsetNowTimeProvider.Instance, sendAdapter));   
-    }
-    
-    public static Props PropsFor<T>(string producerId, Settings settings, Option<Props> durableProducerQueue,
-        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
-    {
-        return Props.Create(() => new ProducerController<T>(producerId, settings, durableProducerQueue, DateTimeOffsetNowTimeProvider.Instance, sendAdapter));   
+        return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, settings, DateTimeOffsetNowTimeProvider.Instance, sendAdapter));   
     }
 
     // TODO: HOCON configuration
@@ -40,14 +35,36 @@ public static class ProducerController
     {
         public const int DefaultDeliveryBufferSize = 128;
 
+        public static Settings Create(ActorSystem actorSystem)
+        {
+            return Create(actorSystem.Settings.Config.GetConfig("aaron.akka.reliable-delivery.producer-controller")!);
+        }
+
+        public static Settings Create(Config config)
+        {
+            var chunkLargeMessageBytes = config.GetString("chunk-large-messages") switch {
+                "off" => 0,
+                _ => (config.GetByteSize("chunk-large-messages") ?? throw new ArgumentException("chunk-large-messages must be set to a valid byte size")),
+            };
+            
+            if(chunkLargeMessageBytes > int.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(config),"Too large chunk-large-messages value. Must be less than 2GB");
+
+            return new Settings(false, durableQueueRequestTimeout: config.GetTimeSpan("durable-queue.request-timeout"),
+                durableQueueRetryAttempts: config.GetInt("durable-queue.retry-attempts"),
+                durableQueueResendFirstInterval: config.GetTimeSpan("durable-queue.resend-first-interval"),
+                deliveryBufferSize: config.GetInt("delivery-buffer-size", 12),
+                chunkLargeMessagesBytes: (int)chunkLargeMessageBytes);
+        }
+
         public Settings(bool requireConfirmationsToProducer, TimeSpan durableQueueRequestTimeout,
-            int durableQueueAttemptRetries, TimeSpan durableQueueResendFirstInterval, int deliveryBufferSize = DefaultDeliveryBufferSize,
+            int durableQueueRetryAttempts, TimeSpan durableQueueResendFirstInterval, int deliveryBufferSize = DefaultDeliveryBufferSize,
             int? chunkLargeMessagesBytes = null)
         {
             ChunkLargeMessagesBytes = chunkLargeMessagesBytes;
             RequireConfirmationsToProducer = requireConfirmationsToProducer;
             DurableQueueRequestTimeout = durableQueueRequestTimeout;
-            DurableQueueAttemptRetries = durableQueueAttemptRetries;
+            DurableQueueRetryAttempts = durableQueueRetryAttempts;
             DurableQueueResendFirstInterval = durableQueueResendFirstInterval;
             DeliveryBufferSize = deliveryBufferSize;
         }
@@ -76,7 +93,7 @@ public static class ProducerController
         /// <summary>
         /// Number of retries allowed for each request to the durable queue.
         /// </summary>
-        public int DurableQueueAttemptRetries { get; }
+        public int DurableQueueRetryAttempts { get; }
 
         /// <summary>
         /// Timeframe for re-delivery of the first message
