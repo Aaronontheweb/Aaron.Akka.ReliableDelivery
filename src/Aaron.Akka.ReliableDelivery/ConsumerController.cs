@@ -96,17 +96,12 @@ public static class ConsumerController
     /// <summary>
     ///     Acknowledgement of a message that was received by the consumer, sent to the ConsumerController.
     /// </summary>
-    public sealed class Confirmed<T> : IConsumerCommand<T>
+    public sealed class Confirmed
     {
-        public Confirmed(string producerId, long confirmedSeqNr)
+        public static readonly Confirmed Instance = new();
+        private Confirmed()
         {
-            ProducerId = producerId;
-            ConfirmedSeqNr = confirmedSeqNr;
         }
-
-        public string ProducerId { get; }
-
-        public long ConfirmedSeqNr { get; }
     }
 
     /// <summary>
