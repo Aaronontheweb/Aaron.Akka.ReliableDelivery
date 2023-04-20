@@ -15,7 +15,7 @@ namespace Aaron.Akka.ReliableDelivery;
 public static class ConsumerController
 {
     /// <summary>
-    ///     Commands that are specific to the consumer side of the <see cref="ReliableDelivery" /> pattern.
+    ///     Commands that are specific to the consumer side of the <see cref="RdConfig" /> pattern.
     /// </summary>
     /// <typeparam name="T">The type of messages the consumer manages.</typeparam>
     public interface IConsumerCommand<T>

@@ -43,8 +43,8 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     private readonly Option<Props> _durableProducerQueueProps;
     private readonly ITimeProvider _timeProvider;
 
-    public ProducerController(string producerId, ProducerController.Settings settings,
-        Option<Props> durableProducerQueue, ITimeProvider? timeProvider = null,
+    public ProducerController(string producerId,
+        Option<Props> durableProducerQueue, ProducerController.Settings? settings = null, ITimeProvider? timeProvider = null,
         Func<SequencedMessage<T>, object>? sendAdapter = null)
     {
         ProducerId = producerId;

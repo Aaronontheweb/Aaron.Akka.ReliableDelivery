@@ -10,6 +10,7 @@ using System.Threading.Channels;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Event;
+using Akka.Util;
 
 namespace Aaron.Akka.ReliableDelivery;
 
@@ -20,6 +21,18 @@ public static class ProducerController
         if (producer is IActorRefScope { IsLocal: false })
             throw new ArgumentException(
                 $"Producer [{producer}] must be local");
+    }
+
+    public static Props PropsFor<T>(string producerId, Option<Props> durableProducerQueue, Settings settings,
+        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+    {
+        return Props.Create(() => new ProducerController<T>(producerId, settings, Option<Props>.None, DateTimeOffsetNowTimeProvider.Instance, sendAdapter));   
+    }
+    
+    public static Props PropsFor<T>(string producerId, Settings settings, Option<Props> durableProducerQueue,
+        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+    {
+        return Props.Create(() => new ProducerController<T>(producerId, settings, durableProducerQueue, DateTimeOffsetNowTimeProvider.Instance, sendAdapter));   
     }
 
     // TODO: HOCON configuration
@@ -73,7 +86,7 @@ public static class ProducerController
 
 
     /// <summary>
-    ///     Commands that are specific to the producer side of the <see cref="ReliableDelivery" /> pattern.
+    ///     Commands that are specific to the producer side of the <see cref="RdConfig" /> pattern.
     /// </summary>
     /// <typeparam name="T">The type of messages the producer manages.</typeparam>
     public interface IProducerCommand<T>
