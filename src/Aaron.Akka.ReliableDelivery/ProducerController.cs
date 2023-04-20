@@ -51,23 +51,20 @@ public static class ProducerController
             if(chunkLargeMessageBytes > int.MaxValue)
                 throw new ArgumentOutOfRangeException(nameof(config),"Too large chunk-large-messages value. Must be less than 2GB");
 
-            return new Settings(false, durableQueueRequestTimeout: config.GetTimeSpan("durable-queue.request-timeout"),
+            return new Settings(durableQueueRequestTimeout: config.GetTimeSpan("durable-queue.request-timeout"),
                 durableQueueRetryAttempts: config.GetInt("durable-queue.retry-attempts"),
                 durableQueueResendFirstInterval: config.GetTimeSpan("durable-queue.resend-first-interval"),
-                deliveryBufferSize: config.GetInt("delivery-buffer-size", 12),
                 chunkLargeMessagesBytes: (int)chunkLargeMessageBytes);
         }
 
-        public Settings(bool requireConfirmationsToProducer, TimeSpan durableQueueRequestTimeout,
-            int durableQueueRetryAttempts, TimeSpan durableQueueResendFirstInterval, int deliveryBufferSize = DefaultDeliveryBufferSize,
+        public Settings(TimeSpan durableQueueRequestTimeout,
+            int durableQueueRetryAttempts, TimeSpan durableQueueResendFirstInterval,
             int? chunkLargeMessagesBytes = null)
         {
             ChunkLargeMessagesBytes = chunkLargeMessagesBytes;
-            RequireConfirmationsToProducer = requireConfirmationsToProducer;
             DurableQueueRequestTimeout = durableQueueRequestTimeout;
             DurableQueueRetryAttempts = durableQueueRetryAttempts;
             DurableQueueResendFirstInterval = durableQueueResendFirstInterval;
-            DeliveryBufferSize = deliveryBufferSize;
         }
 
         /// <summary>
@@ -75,16 +72,7 @@ public static class ProducerController
         ///     into [1,N] chunks of this size.
         /// </summary>
         public int? ChunkLargeMessagesBytes { get; }
-
-        /// <summary>
-        ///     When set to <c>true</c>, ensures that confirmation messages are sent explicitly to the producer.
-        /// </summary>
-        public bool RequireConfirmationsToProducer { get; }
-
-        /// <summary>
-        ///     How many unconfirmed messages can be pending in the buffer before we start backpressuring?
-        /// </summary>
-        public int DeliveryBufferSize { get; }
+        
 
         /// <summary>
         /// The timeout for each request to the durable queue.
@@ -158,6 +146,26 @@ public static class ProducerController
         public IActorRef SendNextTo { get; }
         
         // TODO: askNextTo
+    }
+
+    /// <summary>
+    /// For sending with confirmation back to the producer - message is confirmed once it's stored inside the durable queue.
+    /// </summary>
+    /// <remarks>
+    /// Reply message type is a SeqNo (long).
+    /// </remarks>
+    /// <typeparam name="T"></typeparam>
+    public sealed class MessageWithConfirmation<T> : IProducerCommand<T>
+    {
+        public MessageWithConfirmation(T message, IActorRef replyTo)
+        {
+            Message = message;
+            ReplyTo = replyTo;
+        }
+
+        public T Message { get; }
+        
+        public IActorRef ReplyTo { get; }
     }
 
     /// <summary>

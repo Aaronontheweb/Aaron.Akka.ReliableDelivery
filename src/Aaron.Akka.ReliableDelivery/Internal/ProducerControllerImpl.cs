@@ -50,11 +50,6 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         _durableProducerQueueProps = durableProducerQueue;
         _timeProvider = timeProvider ?? DateTimeOffsetNowTimeProvider.Instance;
         _sendAdapter = sendAdapter ?? DefaultSend;
-        _channel = Channel.CreateBounded<RequestNext<T>>(
-            new BoundedChannelOptions(Settings.DeliveryBufferSize)
-            {
-                SingleWriter = true, SingleReader = true, FullMode = BoundedChannelFullMode.Wait
-            }); // force busy producers to wait
 
         // this state gets overridden during the loading sequence, so it's not used at all really
         CurrentState = new State(false, 0, 0, 0, true, 0, ImmutableList<SequencedMessage<T>>.Empty,
@@ -328,12 +323,12 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     private void Active()
     {
         // receiving a live message with an explicit ACK target
-        Receive<RequestNext<T>>(next => !next.SendNextTo.IsNobody(), sendNext =>
+        Receive<MessageWithConfirmation<T>>(sendNext =>
         {
             CheckReceiveMessageRemainingChunkState();
             var chunks = Chunk(sendNext.Message, true, _serialization.Value);
             var newReplyAfterStore =
-                CurrentState.ReplyAfterStore.SetItem(chunks.Last().SeqNr, sendNext.SendNextTo!);
+                CurrentState.ReplyAfterStore.SetItem(chunks.Last().SeqNr, sendNext.ReplyTo!);
 
             if (DurableProducerQueueRef.IsEmpty)
             {
@@ -354,10 +349,10 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         });
 
         // receiving a live message without an explicit ACK target
-        Receive<RequestNext<T>>(sendNext =>
+        Receive<T>(sendNext =>
         {
             CheckReceiveMessageRemainingChunkState();
-            var chunks = Chunk(sendNext.Message, true, _serialization.Value);
+            var chunks = Chunk(sendNext, true, _serialization.Value);
 
             if (DurableProducerQueueRef.IsEmpty)
             {
@@ -465,7 +460,8 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         else if (seqMsg.IsLastChunk)
         {
             // kick off read task
-            ReadNext();
+            CurrentState.Producer.Tell(new RequestNext<T>(ProducerId, CurrentState.CurrentSeqNr + 1,
+                CurrentState.ConfirmedSeqNr, Self));
             newRequested = true;
         }
         else
@@ -559,7 +555,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             }
             else if (!CurrentState.Requested && (newRequestedSeqNr2 - CurrentState.RequestedSeqNr) > 0)
             {
-                ReadNext();
+                CurrentState.Producer.Tell(new RequestNext<T>(ProducerId, CurrentState.CurrentSeqNr, newConfirmedSeqNr, Self));
                 newRequested = true;
             }
             else
@@ -698,7 +694,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         _log.Debug("Registering new producer [{0}], currentSeqNr [{1}]", start.Producer, CurrentState.CurrentSeqNr);
         if (CurrentState is { Requested: true, RemainingChunks.IsEmpty: true })
         {
-            ReadNext();
+            start.Producer.Tell(new RequestNext<T>(ProducerId, CurrentState.CurrentSeqNr, CurrentState.ConfirmedSeqNr, Self));
         }
 
         CurrentState = CurrentState.WithProducer(start.Producer);
