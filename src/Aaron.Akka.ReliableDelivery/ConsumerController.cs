@@ -5,15 +5,24 @@
 //  </copyright>
 // -----------------------------------------------------------------------
 
+using System;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Annotations;
+using Akka.Configuration;
 using Akka.Event;
 
 namespace Aaron.Akka.ReliableDelivery;
 
 public static class ConsumerController
 {
+    internal static void AssertLocalConsumer(IActorRef consumer)
+    {
+        if (consumer is IActorRefScope { IsLocal: false })
+            throw new ArgumentException(
+                $"Consumer [{consumer}] must be local");
+    }
+    
     /// <summary>
     ///     Commands that are specific to the consumer side of the <see cref="RdConfig" /> pattern.
     /// </summary>
@@ -27,12 +36,25 @@ public static class ConsumerController
     /// </summary>
     public sealed class Start<T> : IConsumerCommand<T>
     {
-        public Start(IActorRef consumer)
+        public Start(IActorRef deliverTo)
         {
-            Consumer = consumer;
+            DeliverTo = deliverTo;
         }
 
-        public IActorRef Consumer { get; }
+        public IActorRef DeliverTo { get; }
+    }
+    
+    /// <summary>
+    /// Instructs the <see cref="ConsumerController{T}"/> to register itself with the <see cref="ProducerController{T}"/>.
+    /// </summary>
+    public sealed class RegisterToProducerController<T> : IConsumerCommand<T>
+    {
+        public RegisterToProducerController(IActorRef producerController)
+        {
+            ProducerController = producerController;
+        }
+
+        public IActorRef ProducerController { get; }
     }
 
     /// <summary>
@@ -41,8 +63,9 @@ public static class ConsumerController
     [InternalApi]
     public sealed class SequencedMessage<T> : IConsumerCommand<T>, IDeliverySerializable, IDeadLetterSuppression
     {
-        internal SequencedMessage(string producerId, long seqNr, MessageOrChunk<T> messageOrChunk, bool first, bool ack, IActorRef producerController)
-        : this(producerId, seqNr, messageOrChunk, first, ack)
+        internal SequencedMessage(string producerId, long seqNr, MessageOrChunk<T> messageOrChunk, bool first, bool ack,
+            IActorRef producerController)
+            : this(producerId, seqNr, messageOrChunk, first, ack)
         {
             ProducerController = producerController;
         }
@@ -68,7 +91,7 @@ public static class ConsumerController
         internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true };
 
         internal bool IsLastChunk => Message.Chunk is { LastChunk: true };
-        
+
         /// <summary>
         /// TESTING ONLY
         /// </summary>
@@ -86,10 +109,11 @@ public static class ConsumerController
     /// </summary>
     public sealed class Delivery<T> : IConsumerCommand<T>, IDeliverySerializable, IDeadLetterSuppression
     {
-        public Delivery(long seqNr, string producerId, T message)
+        public Delivery(T message, IActorRef confirmTo, string producerId, long seqNr)
         {
             SeqNr = seqNr;
             Message = message;
+            ConfirmTo = confirmTo;
             ProducerId = producerId;
         }
 
@@ -97,6 +121,24 @@ public static class ConsumerController
 
         public string ProducerId { get; }
         public T Message { get; }
+        
+        public IActorRef ConfirmTo { get; }
+
+        public override string ToString()
+        {
+            return $"Delivery({Message}, {ConfirmTo}, {ProducerId}, {SeqNr})";
+        }
+    }
+
+    /// <summary>
+    /// Deliver all buffered messages to consumer then shutdown.
+    /// </summary>
+    public sealed class DeliverThenStop<T> : IConsumerCommand<T>
+    {
+        private DeliverThenStop()
+        {
+        }
+        public static readonly DeliverThenStop<T> Instance = new();
     }
 
     /// <summary>
@@ -105,6 +147,7 @@ public static class ConsumerController
     public sealed class Confirmed
     {
         public static readonly Confirmed Instance = new();
+
         private Confirmed()
         {
         }
@@ -127,5 +170,63 @@ public static class ConsumerController
         public long FromSeqNr { get; }
 
         public long ConfirmedSeqNr { get; }
+    }
+
+    /// <summary>
+    /// ConsumerController settings.
+    /// </summary>
+    public sealed class Settings
+    {
+        public static Settings Create(ActorSystem actorSystem)
+        {
+            return Create(actorSystem.Settings.Config.GetConfig("akka.reliable-delivery.consumer-controller")!);
+        }
+        
+        public static Settings Create(Config config)
+        {
+            return new Settings(config.GetInt("flow-control-window"), config.GetTimeSpan("resend-interval-min"),
+                config.GetTimeSpan("resend-interval-max"), config.GetBoolean("only-flow-control"));
+        }
+
+        private Settings(int flowControlWindow, TimeSpan resendIntervalMin, TimeSpan resendIntervalMax,
+            bool onlyFlowControl)
+        {
+            FlowControlWindow = flowControlWindow;
+            ResendIntervalMin = resendIntervalMin;
+            ResendIntervalMax = resendIntervalMax;
+            OnlyFlowControl = onlyFlowControl;
+        }
+
+        public int FlowControlWindow { get; }
+
+        public TimeSpan ResendIntervalMin { get; }
+
+        public TimeSpan ResendIntervalMax { get; }
+
+        public bool OnlyFlowControl { get; }
+        
+        // add method to copy with new FlowControlWindow
+        public Settings WithFlowControlWindow(int flowControlWindow)
+        {
+            return new Settings(flowControlWindow, ResendIntervalMin, ResendIntervalMax, OnlyFlowControl);
+        }
+        
+        // add method to copy with new ResendIntervalMin
+        public Settings WithResendIntervalMin(TimeSpan resendIntervalMin)
+        {
+            return new Settings(FlowControlWindow, resendIntervalMin, ResendIntervalMax, OnlyFlowControl);
+        }
+        
+        // add method to copy with new ResendIntervalMax
+        public Settings WithResendIntervalMax(TimeSpan resendIntervalMax)
+        {
+            return new Settings(FlowControlWindow, ResendIntervalMin, resendIntervalMax, OnlyFlowControl);
+        }
+        
+        // add method to copy with new OnlyFlowControl
+        public Settings WithOnlyFlowControl(bool onlyFlowControl)
+        {
+            return new Settings(FlowControlWindow, ResendIntervalMin, ResendIntervalMax, onlyFlowControl);
+        }
     }
 }

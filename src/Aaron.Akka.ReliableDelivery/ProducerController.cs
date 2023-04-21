@@ -57,7 +57,7 @@ public static class ProducerController
                 chunkLargeMessagesBytes: (int)chunkLargeMessageBytes);
         }
 
-        public Settings(TimeSpan durableQueueRequestTimeout,
+        private Settings(TimeSpan durableQueueRequestTimeout,
             int durableQueueRetryAttempts, TimeSpan durableQueueResendFirstInterval,
             int? chunkLargeMessagesBytes = null)
         {
