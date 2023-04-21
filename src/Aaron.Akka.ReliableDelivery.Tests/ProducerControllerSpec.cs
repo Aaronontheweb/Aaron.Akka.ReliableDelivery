@@ -51,6 +51,11 @@ public class ProducerControllerSpec : TestKit
         seqMsg.ProducerId.Should().Be(ProducerId);
         seqMsg.SeqNr.Should().Be(1);
         seqMsg.ProducerController.Should().Be(producerController);
+        
+        // the ConsumerController will send initial `Request` back, but if that is lost or if the first
+        // `SequencedMessage` is lost the ProducerController will resend the SequencedMessage
+       
+        // TODO: need to implement the ConsumerController to implement this test
     }
 
 }
