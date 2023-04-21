@@ -630,7 +630,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         foreach (var u in loadedState.Unconfirmed)
         {
             unconfirmedBuilder.Add(
-                new SequencedMessage<T>(ProducerId, u.SeqNr, u.Message, i == 0, u.Ack));
+                new SequencedMessage<T>(ProducerId, u.SeqNr, u.Message, i == 0, u.Ack, Self));
             i++;
         }
 
@@ -759,7 +759,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         if (chunkSize == 0) // chunking not enabled
         {
             var sequencedMessage = new SequencedMessage<T>(ProducerId, CurrentState.CurrentSeqNr,
-                msg, CurrentState.CurrentSeqNr == CurrentState.FirstSeqNr, ack);
+                msg, CurrentState.CurrentSeqNr == CurrentState.FirstSeqNr, ack, Self);
             return ImmutableList<SequencedMessage<T>>.Empty.Add(sequencedMessage);
         }
 
@@ -783,7 +783,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             i += 1;
             var sequencedMessage = SequencedMessage<T>.FromChunkedMessage(ProducerId, seqNr,
                 chunkedMessage,
-                seqNr == CurrentState.FirstSeqNr, ack);
+                seqNr == CurrentState.FirstSeqNr, ack, Context.Self);
             return sequencedMessage;
         }).ToImmutableList();
 

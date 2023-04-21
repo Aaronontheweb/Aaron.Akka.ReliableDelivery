@@ -20,22 +20,13 @@ public class TestProducer : ReceiveActor, IWithTimers
 {
     public sealed class Tick
     {
-        public static readonly Tick Instance = new Tick();
+        public static readonly Tick Instance = new();
 
         private Tick()
         {
         }
     }
-    
-    public sealed class WriteNext
-    {
-        public static readonly WriteNext Instance = new WriteNext();
 
-        private WriteNext()
-        {
-        }
-    }
-    
     public int CurrentSequenceNr { get; private set; }
     public TimeSpan Delay { get; }
     public ITimerScheduler Timers { get; set; } = null!;
@@ -46,7 +37,13 @@ public class TestProducer : ReceiveActor, IWithTimers
     {
         Delay = delay;
         _producerController = producerController;
-        WaitingForController();
+        if (Delay == TimeSpan.Zero)
+            ActiveNoDelay();
+        else
+        {
+            Timers.StartPeriodicTimer("tick", Tick.Instance, Delay);
+            Idle();
+        }
     }
 
     protected override void PreStart()
@@ -54,60 +51,44 @@ public class TestProducer : ReceiveActor, IWithTimers
         _producerController.Tell(new ProducerController.Start<TestConsumer.Job>(Self));
     }
 
-    private void WaitingForController()
-    {
-        Receive<ProducerController.StartProduction<TestConsumer.Job>>(production =>
-        {
-            _log.Info("Received StartProduction signal from producer [{0}]", production.ProducerId);
-            if(Delay == TimeSpan.Zero)
-                Become(() => ActiveNoDelay(production.Writer));
-            else
-            {
-                Timers.StartPeriodicTimer("tick", Tick.Instance, Delay);
-                Become(() => Active(production.Writer));
-            }
-        });
-    }
-
-    private void ActiveNoDelay(ChannelWriter<ProducerController.RequestNext<TestConsumer.Job>> writer)
+    private void ActiveNoDelay()
     {
         // no ticks in this behavior
-        ReceiveAsync<WriteNext>(async _ =>
+        Receive<ProducerController.RequestNext<TestConsumer.Job>>(r =>
         {
-            await writer.WriteAsync(CreateMessage(CurrentSequenceNr));
-            Self.Tell(WriteNext.Instance);
+            SendMessage(CurrentSequenceNr, r.SendNextTo);
             CurrentSequenceNr++;
         });
     }
-    
-    private void Active(ChannelWriter<ProducerController.RequestNext<TestConsumer.Job>> writer)
+
+    private void Active(IActorRef sendNextTo)
     {
         Receive<Tick>(_ =>
         {
-            writer.WriteAsync(CreateMessage(CurrentSequenceNr)).PipeTo(Self, success: () => WriteNext.Instance);
-            BecomeStacked(Idle);
+            SendMessage(CurrentSequenceNr, sendNextTo);
+            Become(Idle);
         });
 
-        Receive<WriteNext>(_ =>
+        Receive<ProducerController.RequestNext<TestConsumer.Job>>(_ =>
         {
             throw new InvalidOperationException("Unexpected WriteNext message, already have one.");
         });
     }
-    
+
     private void Idle()
     {
         Receive<Tick>(_ => { }); // ignore
-        Receive<WriteNext>(_ =>
+        Receive<ProducerController.RequestNext<TestConsumer.Job>>(j =>
         {
             CurrentSequenceNr++;
-            UnbecomeStacked();
+            Become(() => Active(j.SendNextTo));
         });
     }
 
-    private ProducerController.RequestNext<TestConsumer.Job> CreateMessage(int n)
+    private void SendMessage(int n, IActorRef sendTo)
     {
         var msg = $"msg-{n}";
         _log.Info("Sent [{0}]", n);
-        return new ProducerController.RequestNext<TestConsumer.Job>(new TestConsumer.Job(msg), ActorRefs.NoSender);
+        sendTo.Tell(new TestConsumer.Job(msg));
     }
 }

@@ -34,7 +34,6 @@ public class ProducerControllerSpec : TestKit
     [Fact]
     public async Task ProducerController_must_resend_lost_initial_SequencedMessage()
     {
-        // arrange
         NextId();
         var consumerProbe = CreateTestProbe();
 
@@ -43,16 +42,15 @@ public class ProducerControllerSpec : TestKit
         producerController.Tell(new ProducerController.Start<TestConsumer.Job>(producerProbe.Ref));
         producerController.Tell(new ProducerController.RegisterConsumer<TestConsumer.Job>(consumerProbe.Ref));
 
-        var startProduction = await producerProbe.ExpectMsgAsync<ProducerController.StartProduction<TestConsumer.Job>>();
-        var outputChannel = startProduction.Writer;
+        var sendTo = (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<TestConsumer.Job>>())
+            .SendNextTo;
+        sendTo.Tell(new TestConsumer.Job("msg-1"));
         
-        // act
-        await outputChannel.WriteAsync(new ProducerController.RequestNext<TestConsumer.Job>(new TestConsumer.Job("msg-1"), ActorRefs.NoSender));
         var seqMsg = await consumerProbe.ExpectMsgAsync<ConsumerController.SequencedMessage<TestConsumer.Job>>();
-        
-        // assert
+
         seqMsg.ProducerId.Should().Be(ProducerId);
         seqMsg.SeqNr.Should().Be(1);
+        seqMsg.ProducerController.Should().Be(producerController);
     }
 
 }

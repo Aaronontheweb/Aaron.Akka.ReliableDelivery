@@ -41,6 +41,12 @@ public static class ConsumerController
     [InternalApi]
     public sealed class SequencedMessage<T> : IConsumerCommand<T>, IDeliverySerializable, IDeadLetterSuppression
     {
+        internal SequencedMessage(string producerId, long seqNr, MessageOrChunk<T> messageOrChunk, bool first, bool ack, IActorRef producerController)
+        : this(producerId, seqNr, messageOrChunk, first, ack)
+        {
+            ProducerController = producerController;
+        }
+
         public SequencedMessage(string producerId, long seqNr, MessageOrChunk<T> messageOrChunk, bool first, bool ack)
         {
             SeqNr = seqNr;
@@ -62,11 +68,16 @@ public static class ConsumerController
         internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true };
 
         internal bool IsLastChunk => Message.Chunk is { LastChunk: true };
+        
+        /// <summary>
+        /// TESTING ONLY
+        /// </summary>
+        internal IActorRef ProducerController { get; } = ActorRefs.Nobody;
 
         internal static SequencedMessage<T> FromChunkedMessage(string producerId, long seqNr,
-            ChunkedMessage chunkedMessage, bool first, bool ack)
+            ChunkedMessage chunkedMessage, bool first, bool ack, IActorRef producerController)
         {
-            return new SequencedMessage<T>(producerId, seqNr, chunkedMessage, first, ack);
+            return new SequencedMessage<T>(producerId, seqNr, chunkedMessage, first, ack, producerController);
         }
     }
 
