@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using Akka.Actor;
 using Akka.Event;
+using Akka.Pattern;
 using Akka.Serialization;
 using Akka.Util;
 using Akka.Util.Extensions;
@@ -98,6 +99,10 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
         });
     }
 
+    /// <summary>
+    /// Expecting a SequencedMessage from ProducerController, that will be delivered to the consumer if
+    /// the seqNr is right.
+    /// </summary>
     private void Active()
     {
         Receive<SequencedMessage<T>>(seqMsg =>
@@ -191,6 +196,34 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
     /// </summary>
     private void Resending()
     {
+        if (Stash.NonEmpty)
+            throw new IllegalStateException("Stash should have been cleared before resending.");
+
+        Receive<SequencedMessage<T>>(seqMsg =>
+        {
+            var seqNr = seqMsg.SeqNr;
+            if (CurrentState.IsProducerChanged(seqMsg))
+            {
+                if(seqMsg.First && _log.IsDebugEnabled) // TODO: should really be trace
+                    _log.Debug("Received first SequencedMessage from seqNr [{0}], delivering to consumer.", seqNr);
+                ReceiveChangedProducer(seqMsg);
+            } else if (CurrentState.Registering.HasValue)
+            {
+                _log.Debug("Received SequencedMessage seqNr [{0}], discarding message because registering to new ProducerController.", seqNr);
+            } else if (CurrentState.IsNextExpected(seqMsg))
+            {
+                _log.Debug("Received missing SequencedMessage seqNr [{0}].", seqNr);
+                CurrentState = CurrentState.Copy(receivedSeqNr: seqNr);
+                Deliver(seqMsg);
+            }
+            else
+            {
+                _log.Debug("Received SequencedMessage seqNr [{0}], discarding message because waiting for [{1}].", seqNr, CurrentState.ReceivedSeqNr + 1);
+                
+                if (seqMsg.First)
+                    CurrentState = RetryRequest();
+            }
+        });
     }
 
     private void WaitingForConfirmation(SequencedMessage<T> sequencedMessage)
