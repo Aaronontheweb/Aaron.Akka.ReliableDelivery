@@ -109,7 +109,7 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             var seqNr = sequencedMessage.SeqNr;
             if (_log.IsDebugEnabled)
             {
-                _log.Debug("Received Confirmed seqNr [{0}] from consumer.", seqNr);
+                _log.Debug("Received Confirmed seqNr [{0}] from consumer, stashed size [{1}].", seqNr, Stash.Count);
             }
 
             long ComputeNextSeqNr()
@@ -118,13 +118,16 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
                 {
                     // confirm the first message immediately to cancel resending of first
                     var newRequestedSeqNr = seqNr - 1 + Settings.FlowControlWindow;
-                    _log.Debug("Sending Request after first with confirmedSeqNr [{0}], requestUpToSeqNr [{1}]", seqNr, newRequestedSeqNr);
+                    _log.Debug("Sending Request after first with confirmedSeqNr [{0}], requestUpToSeqNr [{1}]", seqNr,
+                        newRequestedSeqNr);
                     CurrentState.ProducerController.Tell(new Request(seqNr, newRequestedSeqNr, ResendLost, false));
                     return newRequestedSeqNr;
-                } else if ((CurrentState.RequestedSeqNr - seqNr) == Settings.FlowControlWindow / 2)
+                }
+                else if ((CurrentState.RequestedSeqNr - seqNr) == Settings.FlowControlWindow / 2)
                 {
                     var newRequestedSeqNr = CurrentState.RequestedSeqNr + Settings.FlowControlWindow / 2;
-                    _log.Debug("Sending Request with confirmedSeqNr [{0}], requestUpToSeqNr [{1}]", seqNr, newRequestedSeqNr);
+                    _log.Debug("Sending Request with confirmedSeqNr [{0}], requestUpToSeqNr [{1}]", seqNr,
+                        newRequestedSeqNr);
                     CurrentState.ProducerController.Tell(new Request(seqNr, newRequestedSeqNr, ResendLost, false));
                     _retryTimer.Start(); // reset interval since Request was just sent
                     return newRequestedSeqNr;
@@ -143,15 +146,12 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             }
 
             var requestedSeqNr = ComputeNextSeqNr();
-            if (CurrentState.Stopping) // TODO: need to be able to check stash size in future version of Akka.NET
+            if (CurrentState.Stopping && Stash.IsEmpty)
             {
-                //if (Stash.IsEmpty)
-                {
-                    _log.Debug("Stopped at seqNr [{0}], after delivery of buffered messages.", seqNr);
-                    // best effort to Ack latest confirmed when stopping
-                    CurrentState.ProducerController.Tell(new Ack(seqNr));
-                    Context.Stop(Self);
-                }
+                _log.Debug("Stopped at seqNr [{0}], after delivery of buffered messages.", seqNr);
+                // best effort to Ack latest confirmed when stopping
+                CurrentState.ProducerController.Tell(new Ack(seqNr));
+                Context.Stop(Self);
             }
             else
             {
@@ -161,13 +161,108 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             }
         });
 
-        Receive<SequencedMessage<T>>(nextSeq =>
+        Receive<SequencedMessage<T>>(msg =>
         {
-            var expectedSeqNr = sequencedMessage.SeqNr + 1; // need to compute stash buffer size
+            var expectedSeqNr = sequencedMessage.SeqNr + Stash.Count + 1; // need to compute stash buffer size
+            if (msg.SeqNr < expectedSeqNr && msg.ProducerController.Equals(sequencedMessage.ProducerController))
+            {
+                _log.Debug("Received duplicate SequencedMessage seqNr [{0}]", msg.SeqNr);
+            }
+            else if (Stash.IsFull)
+            {
+                // possible that the stash is full if ProducerController resends unconfirmed (duplicates)
+                // dropping them since they can be resent
+                _log.Debug("Received SequencedMessage seqNr [{0}] but stash is full, dropping.", msg.SeqNr);
+            }
+            else
+            {
+                if (_log.IsDebugEnabled)
+                    _log.Debug(
+                        "Received SequencedMessage seqNr [{0}], stashing while waiting for consumer to confirm [{1}]. Stashed size [{2}].",
+                        msg.SeqNr,
+                        sequencedMessage.SeqNr, Stash.Count + 1);
+                Stash.Stash();
+            }
+        });
+
+        Receive<Retry>(_ =>
+        {
+            // no retries when WaitingForConfirmation, will be performed from (idle) active
+        });
+
+        Receive<ConsumerController.Start<T>>(start =>
+        {
+            start.DeliverTo.Tell(new Delivery<T>(sequencedMessage.Message.Message!, Self, sequencedMessage.ProducerId,
+                sequencedMessage.SeqNr));
+            ReceiveStart(start, () => WaitingForConfirmation(sequencedMessage));
+        });
+
+        Receive<ConsumerTerminated>(terminated =>
+        {
+            ReceiveConsumerTerminated(terminated.Consumer);
+        });
+
+        Receive<RegisterToProducerController<T>>(controller =>
+        {
+            ReceiveRegisterToProducerController(controller, () => WaitingForConfirmation(sequencedMessage));
+        });
+
+        Receive<DeliverThenStop<T>>(stop =>
+        {
+            ReceiveDeliverThenStop(Active);
         });
     }
 
     #region Internal Methods
+
+    private void ReceiveDeliverThenStop(Action nextBehavior)
+    {
+        if (Stash.IsEmpty && CurrentState.ReceivedSeqNr == CurrentState.ConfirmedSeqNr)
+        {
+            _log.Debug("Stopped at seqNr [{0}], no buffered messages.", CurrentState.ConfirmedSeqNr);
+            Context.Stop(Self);
+        }
+        else
+        {
+            CurrentState = CurrentState.Copy(stopping: true);
+            Become(nextBehavior);
+        }
+    }
+    
+    private void ReceiveRegisterToProducerController(RegisterToProducerController<T> reg, Action nextBehavior)
+    {
+        if (!reg.ProducerController.Equals(CurrentState.ProducerController))
+        {
+            _log.Debug("Registering to new ProducerController [{0}], previous was [{1}].", reg.ProducerController, CurrentState.ProducerController);
+            _retryTimer.Start();
+            reg.ProducerController.Tell(new RegisterConsumer<T>(Self));
+            CurrentState = CurrentState.Copy(registering: reg.ProducerController.AsOption());
+            Become(nextBehavior);
+        }
+    }
+
+    private void ReceiveConsumerTerminated(IActorRef consumer)
+    {
+        _log.Debug("Consumer [{0}] terminated.", consumer);
+        Context.Stop(Self);
+    }
+
+    private void ReceiveStart(ConsumerController.Start<T> start, Action nextBehavior)
+    {
+        ConsumerController.AssertLocalConsumer(start.DeliverTo);
+        if (start.DeliverTo.Equals(CurrentState.Consumer))
+        {
+            Become(nextBehavior);
+        }
+        else
+        {
+            // if the Consumer is restarted, it may send Start again
+            Context.Unwatch(CurrentState.Consumer);
+            Context.WatchWith(start.DeliverTo, new ConsumerTerminated(start.DeliverTo));
+            CurrentState = CurrentState.Copy(consumer: start.DeliverTo);
+            Become(nextBehavior);
+        }
+    }
 
     private void ReceiveChangedProducer(SequencedMessage<T> seqMsg)
     {
@@ -184,7 +279,7 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
 
     private void LogChangedProducer(SequencedMessage<T> seqMsg)
     {
-        if (CurrentState.ProducerController == Context.System.DeadLetters)
+        if (CurrentState.ProducerController.Equals(Context.System.DeadLetters))
         {
             _log.Debug("Associated with new ProducerController [{0}], seqNr [{1}].", seqMsg.ProducerController,
                 seqMsg.SeqNr);
@@ -205,7 +300,8 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             var assembledSeqMsg = !seqMsg.Message.IsMessage
                 ? AssembleChunks(previouslyCollectedChunks.Add(seqMsg))
                 : seqMsg;
-            CurrentState.Consumer.Tell(new Delivery<T>(assembledSeqMsg.Message.Message!, Context.Self, seqMsg.ProducerId, seqMsg.SeqNr));
+            CurrentState.Consumer.Tell(new Delivery<T>(assembledSeqMsg.Message.Message!, Context.Self,
+                seqMsg.ProducerId, seqMsg.SeqNr));
         }
     }
 
@@ -230,7 +326,8 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
         var headMessage = reverseCollectedChunks.First(); // this is the last chunk
         var headChunk = headMessage.Message.Chunk!.Value;
         var message = (T)_serialization.Deserialize(bytes, headChunk.SerializerId, headChunk.Manifest);
-        return new SequencedMessage<T>(headMessage.ProducerId, headMessage.SeqNr, message, headMessage.First, headMessage.Ack, headMessage.ProducerController);
+        return new SequencedMessage<T>(headMessage.ProducerId, headMessage.SeqNr, message, headMessage.First,
+            headMessage.Ack, headMessage.ProducerController);
     }
 
     private static State InitialState(ConsumerController.Start<T> start, Option<IActorRef> registering, bool stopping)
