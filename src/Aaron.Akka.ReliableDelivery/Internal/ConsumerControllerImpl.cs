@@ -4,7 +4,6 @@ using System.Collections.Immutable;
 using System.Linq;
 using Akka.Actor;
 using Akka.Event;
-using Akka.IO;
 using Akka.Serialization;
 using Akka.Util;
 using Akka.Util.Extensions;
@@ -31,6 +30,8 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
         Settings = settings;
         _retryTimer = new RetryTimer(Settings.ResendIntervalMin, Settings.ResendIntervalMax, Timers);
 
+        // this Timer will get overwritten by the RetryTimer once we exit the WaitForStart stage
+        Timers.StartPeriodicTimer(Retry.Instance, Retry.Instance, settings.ResendIntervalMin);
         WaitForStart();
     }
 
@@ -49,23 +50,36 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             AssertLocalConsumer(start.DeliverTo);
             Context.WatchWith(start.DeliverTo, new ConsumerTerminated(start.DeliverTo));
 
-            _log.Debug("Received Start, unstashing messages");
+            _log.Debug("Received Start, unstash [{0}] messages", Stash.Count);
             CurrentState = InitialState(start, _producerControllerRegistration, stopping);
-            Stash.UnstashAll();
+            Stash.Unstash();
             Become(Active);
         });
 
         Receive<SequencedMessage<T>>(seqMsg =>
         {
-            // TODO: need a way of check if stash is at capacity
-            _log.Debug("Received SequencedMessage seqNr [{0}], stashing before Start.", seqMsg.SeqNr);
-            Stash.Stash();
+            if (Stash.IsFull)
+            {
+                _log.Debug("Received SequencedMessage seqNr [{0}], stashing before Start, discarding message because Stash is full.", seqMsg.SeqNr);
+            }
+            else
+            {
+                _log.Debug("Received SequencedMessage seqNr [{0}], stashing before Start, stashed size [{1}]", seqMsg.SeqNr,
+                    Stash.Count + 1);
+                Stash.Stash();
+            }
         });
 
         Receive<DeliverThenStop<T>>(_ =>
         {
-            // TODO: check if Stash is empty
-            stopping = true;
+            if (Stash.IsEmpty)
+            {
+                Context.Stop(Self);
+            }
+            else
+            {
+                stopping = true;
+            }
         });
 
         Receive<Retry>(_ =>
@@ -98,8 +112,85 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             {
                 if (seqMsg.First && _log.IsDebugEnabled)
                     _log.Debug("Received first SequencedMessage from seqNr [{0}], delivering to consumer.", seqNr);
+                ReceiveChangedProducer(seqMsg);
+            }
+            else if (CurrentState.Registering.HasValue)
+            {
+                _log.Debug(
+                    "Received SequencedMessage seqNr [{0}], discarding message because registering to new ProducerController.",
+                    seqNr);
+                Stash.Unstash();
+            }
+            else if (CurrentState.IsNextExpected(seqMsg))
+            {
+                if (_log.IsDebugEnabled) // should really be tracing loglevel
+                    _log.Debug("Received SequencedMessage seqNr [{0}], delivering to consumer.", seqNr);
+                
+                CurrentState = CurrentState.Copy(receivedSeqNr: seqNr);
+                Deliver(seqMsg);
+            }
+            else if (seqNr > expectedSeqNr)
+            {
+                var msg = "Received SequencedMessage seqNr [{0}], but expected [{1}]," +
+                          (ResendLost ? " Requesting resend from expected seqNr." : " delivering to consumer anyway.");
+                _log.Debug(msg, seqNr, expectedSeqNr);
+                if (ResendLost)
+                {
+                    seqMsg.ProducerController.Tell(new Resend(expectedSeqNr));
+                    Stash.ClearStash();
+                    _retryTimer.Start();
+                    Become(Resending);
+                }
+                else
+                {
+                    CurrentState = CurrentState.Copy(receivedSeqNr: seqNr);
+                    Deliver(seqMsg);
+                }
+            }
+            else // seqNr < expectedSeqNr
+            {
+                _log.Debug("Received duplicate SequencedMessage seqNr [{0}], expected [{1}].", seqNr, expectedSeqNr);
+                Stash.Unstash();
+                if (seqMsg.First)
+                {
+                    CurrentState = RetryRequest();
+                }
             }
         });
+        
+        Receive<Retry>(retry =>
+        {
+            CurrentState = RetryRequest();
+            ReceiveRetry(Active);
+        });
+
+        Receive<Confirmed>(ReceiveUnexpectedConfirmed);
+
+        Receive<ConsumerController.Start<T>>(start =>
+        {
+            ReceiveStart(start, Active);
+        });
+
+        Receive<ConsumerTerminated>(t => ReceiveConsumerTerminated(t.Consumer));
+        
+        Receive<RegisterToProducerController<T>>(controller =>
+        {
+            ReceiveRegisterToProducerController(controller, Active);
+        });
+
+        Receive<DeliverThenStop<T>>(_ =>
+        {
+            ReceiveDeliverThenStop(Active);
+        });
+    }
+
+    /// <summary>
+    /// It has detected a missing seqNr and requested a <see cref="Resend"/>. Expecting a <see cref="SequencedMessage{T}"/> from the
+    /// ProducerController with the missing seqNr. Other <see cref="SequencedMessage{T}"/> with different seqNr will be
+    /// discarded since they were in flight before the <see cref="Resend"/> request and will anyway be sent again.
+    /// </summary>
+    private void Resending()
+    {
     }
 
     private void WaitingForConfirmation(SequencedMessage<T> sequencedMessage)
@@ -197,23 +288,53 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             ReceiveStart(start, () => WaitingForConfirmation(sequencedMessage));
         });
 
-        Receive<ConsumerTerminated>(terminated =>
-        {
-            ReceiveConsumerTerminated(terminated.Consumer);
-        });
+        Receive<ConsumerTerminated>(terminated => { ReceiveConsumerTerminated(terminated.Consumer); });
 
         Receive<RegisterToProducerController<T>>(controller =>
         {
             ReceiveRegisterToProducerController(controller, () => WaitingForConfirmation(sequencedMessage));
         });
 
-        Receive<DeliverThenStop<T>>(stop =>
-        {
-            ReceiveDeliverThenStop(Active);
-        });
+        Receive<DeliverThenStop<T>>(stop => { ReceiveDeliverThenStop(Active); });
+    }
+
+    protected override void PostStop()
+    {
+        // best effort to Ack latest confirmed when stopping
+        CurrentState.ProducerController.Tell(new Ack(CurrentState.ConfirmedSeqNr));
     }
 
     #region Internal Methods
+
+    private void ReceiveUnexpectedConfirmed(Confirmed c)
+    {
+        _log.Warning("Received unexpected Confirmed for seqNr from consumer.");
+        Unhandled(c);
+    }
+    
+    private void ReceiveRetry(Action nextBehavior)
+    {
+        _retryTimer.ScheduleNext();
+        if(_retryTimer.Interval != _retryTimer.MinBackoff)
+            _log.Debug("Schedule next retry in [{0} ms]", _retryTimer.Interval.TotalMilliseconds);
+        if(CurrentState.Registering.IsEmpty)
+            Become(nextBehavior);
+        else
+        {
+            CurrentState.Registering.Value.Tell(new RegisterConsumer<T>(Context.Self));
+        }
+    }
+    
+    private State RetryRequest()
+    {
+        if (CurrentState.ProducerController == Context.System.DeadLetters)
+            return CurrentState;
+        
+        var newRequestedSeqNr = ResendLost ? CurrentState.RequestedSeqNr : CurrentState.ReceivedSeqNr + Settings.FlowControlWindow/2;
+        _log.Debug("Retry sending Request with confirmedSeqNr [{0}], requestUpToSeqNr [{1}]", CurrentState.ConfirmedSeqNr, newRequestedSeqNr);
+        CurrentState.ProducerController.Tell(new Request(CurrentState.ConfirmedSeqNr, newRequestedSeqNr, ResendLost, true));
+        return CurrentState.Copy(requestedSeqNr: newRequestedSeqNr);
+    }
 
     private void ReceiveDeliverThenStop(Action nextBehavior)
     {
@@ -228,12 +349,13 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             Become(nextBehavior);
         }
     }
-    
+
     private void ReceiveRegisterToProducerController(RegisterToProducerController<T> reg, Action nextBehavior)
     {
         if (!reg.ProducerController.Equals(CurrentState.ProducerController))
         {
-            _log.Debug("Registering to new ProducerController [{0}], previous was [{1}].", reg.ProducerController, CurrentState.ProducerController);
+            _log.Debug("Registering to new ProducerController [{0}], previous was [{1}].", reg.ProducerController,
+                CurrentState.ProducerController);
             _retryTimer.Start();
             reg.ProducerController.Tell(new RegisterConsumer<T>(Self));
             CurrentState = CurrentState.Copy(registering: reg.ProducerController.AsOption());
@@ -274,6 +396,30 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             var newRequestedSeqNr = seqMsg.SeqNr - 1 + Settings.FlowControlWindow;
             _log.Debug("Sending Request with requestUpToSeqNr [{0}] after first SequencedMessage.", newRequestedSeqNr);
             seqMsg.ProducerController.Tell(new Request(0, newRequestedSeqNr, ResendLost, false));
+
+            CurrentState = CurrentState.Copy(producerController: seqMsg.ProducerController,
+                producerId: seqMsg.ProducerId, requestedSeqNr: newRequestedSeqNr, confirmedSeqNr: 0L,
+                registering: CurrentState.UpdatedRegistering(seqMsg));
+            Deliver(seqMsg);
+        }
+        else if (CurrentState.ReceivedSeqNr == 0)
+        {
+            // needed for sharding
+            _log.Debug("Received SequencedMessage seqNr [{0}], from new producer [{1}] but it wasn't first. Resending.",
+                seqNr, seqMsg.ProducerController);
+            // request to resend all of unconfirmed, and mark first
+            seqMsg.ProducerController.Tell(new Resend(0L));
+            Stash.ClearStash();
+            _retryTimer.Start();
+            Become(Resending);
+        }
+        else
+        {
+            _log.Warning(
+                "Received SequencedMessage seqNr [{0}], " +
+                "discarding message because it was from unexpected producer [{1}] when expecting [{2}].",
+                seqNr, seqMsg.ProducerController, CurrentState.ProducerController);
+            Stash.Unstash();
         }
     }
 
@@ -302,6 +448,37 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
                 : seqMsg;
             CurrentState.Consumer.Tell(new Delivery<T>(assembledSeqMsg.Message.Message!, Context.Self,
                 seqMsg.ProducerId, seqMsg.SeqNr));
+            CurrentState = CurrentState.ClearCollectedChunks();
+            Become(() => WaitingForConfirmation(assembledSeqMsg));
+        }
+        else
+        {
+            // collecting chunks
+            long GetNewRequestedSeqNr()
+            {
+                if (CurrentState.RequestedSeqNr - seqMsg.SeqNr == Settings.FlowControlWindow / 2)
+                {
+                    var newRequestedSeqNr = CurrentState.RequestedSeqNr + Settings.FlowControlWindow / 2;
+                    _log.Debug(
+                        "Sending Request when collecting chunks seqNr [{0}], confirmedSeqNr [{1}], requestUpToSeqNr [{2}]",
+                        seqMsg.SeqNr,
+                        CurrentState.ConfirmedSeqNr, newRequestedSeqNr);
+                    CurrentState.ProducerController.Tell(new Request(CurrentState.ConfirmedSeqNr, newRequestedSeqNr,
+                        ResendLost, false));
+                    _retryTimer.Start();
+                    return newRequestedSeqNr;
+                }
+                else
+                {
+                    return CurrentState.RequestedSeqNr;
+                }
+            }
+
+            var newRequestedSeqNr = GetNewRequestedSeqNr();
+            Stash.Unstash();
+            CurrentState = CurrentState.Copy(requestedSeqNr: newRequestedSeqNr,
+                collectedChunks: previouslyCollectedChunks.Add(seqMsg));
+            Become(Active);
         }
     }
 
@@ -452,6 +629,15 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
         public bool IsProducerChanged(SequencedMessage<T> seqMsg)
         {
             return !seqMsg.ProducerController.Equals(ProducerController) || ReceivedSeqNr == 0;
+        }
+
+        public Option<IActorRef> UpdatedRegistering(SequencedMessage<T> seqMsg)
+        {
+            // clear out registration if this is a dupe, otherwise keep our previous registration value
+            if (Registering.IsEmpty) return Option<IActorRef>.None;
+            if (seqMsg.ProducerController.Equals(Registering.Value))
+                return Option<IActorRef>.None;
+            return Registering;
         }
 
         public State ClearCollectedChunks()
