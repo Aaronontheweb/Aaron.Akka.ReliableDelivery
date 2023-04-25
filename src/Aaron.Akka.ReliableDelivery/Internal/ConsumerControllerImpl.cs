@@ -603,7 +603,7 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
         // we can't just ignore the message
         
         var message = (T)_serialization.Deserialize(bytes, headChunk.SerializerId, headChunk.Manifest);
-        return new SequencedMessage<T>(headMessage.ProducerId, headMessage.SeqNr, message, headMessage.First,
+        return new SequencedMessage<T>(headMessage.ProducerId, headMessage.SeqNr, message, collectedChunks.First().First,
             headMessage.Ack, headMessage.ProducerController);
     }
 
