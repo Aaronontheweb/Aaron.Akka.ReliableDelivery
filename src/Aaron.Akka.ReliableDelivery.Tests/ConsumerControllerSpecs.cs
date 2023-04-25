@@ -162,4 +162,35 @@ public class ConsumerControllerSpecs : TestKit
         (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(5);
         consumerController.Tell(ConsumerController.Confirmed.Instance);
     }
+
+    [Fact]
+    public async Task ConsumerController_should_resend_Request()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 20, true, false));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(1, 20, true, false));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 2, producerControllerProbe));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(2, 20, true, true));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 3, producerControllerProbe));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(3);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(3, 20, true, true));
+        
+        // exponential backoff, so now the resend should take longer than 1 second
+        await producerControllerProbe.ExpectNoMsgAsync(TimeSpan.FromSeconds(1.1));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(3, 20, true, true));
+    }
 }

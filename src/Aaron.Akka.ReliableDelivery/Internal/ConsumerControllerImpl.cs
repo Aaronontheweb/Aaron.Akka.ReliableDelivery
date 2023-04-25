@@ -59,6 +59,7 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             CurrentState = InitialState(start, _producerControllerRegistration, stopping);
             Stash.Unstash();
             Timers.CancelAll(); // clear recurring timers
+            _retryTimer.Start(); // let the RetryTimer take over
             Become(Active);
         });
 
@@ -110,8 +111,6 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
     /// </summary>
     private void Active()
     {
-        _retryTimer.Start();
-        
         Receive<SequencedMessage<T>>(seqMsg =>
         {
             var pid = seqMsg.ProducerId;
