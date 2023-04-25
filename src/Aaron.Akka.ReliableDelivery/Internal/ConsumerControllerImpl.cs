@@ -224,6 +224,31 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
                     CurrentState = RetryRequest();
             }
         });
+
+        Receive<Retry>(r =>
+        {
+            ReceiveRetry(() =>
+            {
+                _log.Debug("Retry sending Resend [{0}].", CurrentState.ReceivedSeqNr + 1);
+                CurrentState.ProducerController.Tell(new Resend(CurrentState.ReceivedSeqNr + 1));
+                Resending();
+            });
+        });
+        
+        Receive<Confirmed>(ReceiveUnexpectedConfirmed);
+        Receive<ConsumerController.Start<T>>(start =>
+        {
+            ReceiveStart(start, Resending);
+        });
+        Receive<ConsumerTerminated>(t => ReceiveConsumerTerminated(t.Consumer));
+        Receive<RegisterToProducerController<T>>(controller =>
+        {
+            ReceiveRegisterToProducerController(controller, Active);
+        });
+        Receive<DeliverThenStop<T>>(_ =>
+        {
+            ReceiveDeliverThenStop(Resending);
+        });
     }
 
     private void WaitingForConfirmation(SequencedMessage<T> sequencedMessage)
@@ -360,7 +385,7 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
     
     private State RetryRequest()
     {
-        if (CurrentState.ProducerController == Context.System.DeadLetters)
+        if (CurrentState.ProducerController.Equals(Context.System.DeadLetters))
             return CurrentState;
         
         var newRequestedSeqNr = ResendLost ? CurrentState.RequestedSeqNr : CurrentState.ReceivedSeqNr + Settings.FlowControlWindow/2;
