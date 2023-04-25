@@ -37,7 +37,7 @@ public class ProducerControllerSpec : TestKit
         NextId();
         var consumerProbe = CreateTestProbe();
 
-        var producerController = Sys.ActorOf(ProducerController.PropsFor<TestConsumer.Job>(ProducerId, Option<Props>.None), $"producerController-{_idCount}");
+        var producerController = Sys.ActorOf(Sys.ProducerControllerProps<TestConsumer.Job>(ProducerId, Option<Props>.None), $"producerController-{_idCount}");
         var producerProbe = CreateTestProbe();
         producerController.Tell(new ProducerController.Start<TestConsumer.Job>(producerProbe.Ref));
         producerController.Tell(new ProducerController.RegisterConsumer<TestConsumer.Job>(consumerProbe.Ref));

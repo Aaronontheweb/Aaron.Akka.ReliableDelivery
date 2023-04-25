@@ -11,6 +11,7 @@ using Akka.Actor;
 using Akka.Annotations;
 using Akka.Configuration;
 using Akka.Event;
+using Akka.Util;
 
 namespace Aaron.Akka.ReliableDelivery;
 
@@ -21,6 +22,19 @@ public static class ConsumerController
         if (consumer is IActorRefScope { IsLocal: false })
             throw new ArgumentException(
                 $"Consumer [{consumer}] must be local");
+    }
+    
+    public static Props ConsumerControllerProps<T>(this IActorContext context, Option<IActorRef> producerControllerReference, Settings? settings = null)
+    {
+        return context.System.ConsumerControllerProps<T>(producerControllerReference, settings);
+    }
+
+    public static Props ConsumerControllerProps<T>(this ActorSystem system, Option<IActorRef> producerControllerReference, Settings? settings = null)
+    {
+        var realSettings = settings ?? ConsumerController.Settings.Create(system);
+        // need to set the stash size equal to the flow control window
+        return Props.Create(() => new ConsumerController<T>(producerControllerReference, realSettings))
+            .WithStashCapacity(realSettings.FlowControlWindow);
     }
     
     /// <summary>
@@ -151,25 +165,6 @@ public static class ConsumerController
         private Confirmed()
         {
         }
-    }
-
-    /// <summary>
-    ///     Send from the ConsumerController to the ProducerController to request more messages.
-    /// </summary>
-    public sealed class Request<T> : IDeliverySerializable, IDeadLetterSuppression
-    {
-        public Request(string producerId, long fromSeqNr, long confirmedSeqNr)
-        {
-            ProducerId = producerId;
-            FromSeqNr = fromSeqNr;
-            ConfirmedSeqNr = confirmedSeqNr;
-        }
-
-        public string ProducerId { get; }
-
-        public long FromSeqNr { get; }
-
-        public long ConfirmedSeqNr { get; }
     }
 
     /// <summary>

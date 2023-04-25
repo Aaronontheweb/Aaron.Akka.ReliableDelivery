@@ -24,14 +24,19 @@ public static class ProducerController
             throw new ArgumentException(
                 $"Producer [{producer}] must be local");
     }
+    
+    public static Props ProducerControllerProps<T>(this IActorContext context, string producerId, Option<Props> durableProducerQueue, Settings? settings = null,
+        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+    {
+        return context.System.ProducerControllerProps(producerId, durableProducerQueue, settings, sendAdapter);
+    }
 
-    public static Props PropsFor<T>(string producerId, Option<Props> durableProducerQueue, Settings? settings = null,
+    public static Props ProducerControllerProps<T>(this ActorSystem actorSystem, string producerId, Option<Props> durableProducerQueue, Settings? settings = null,
         Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
     {
         return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, settings, DateTimeOffsetNowTimeProvider.Instance, sendAdapter));   
     }
-
-    // TODO: HOCON configuration
+    
     public sealed class Settings
     {
         public const int DefaultDeliveryBufferSize = 128;
@@ -113,7 +118,7 @@ public static class ProducerController
     }
 
     /// <summary>
-    ///     A send instruction sent from Producers to Consumers.
+    ///     A send instruction sent from the ProducerController to the Producer to request the next message to be sent.
     /// </summary>
     public sealed class RequestNext<T> : IProducerCommand<T>, INoSerializationVerificationNeeded
     {

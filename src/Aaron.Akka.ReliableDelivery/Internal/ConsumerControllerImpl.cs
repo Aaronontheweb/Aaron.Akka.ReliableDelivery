@@ -14,6 +14,10 @@ using static Aaron.Akka.ReliableDelivery.ProducerController;
 
 namespace Aaron.Akka.ReliableDelivery.Internal;
 
+/// <summary>
+/// INTERNAL API
+/// </summary>
+/// <typeparam name="T">The types of messages handled by the <see cref="ConsumerController"/> and <see cref="ProducerController"/>.</typeparam>
 internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithStash
 {
     private readonly ILoggingAdapter _log = Context.GetLogger();
@@ -21,8 +25,8 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
     private Option<IActorRef> _producerControllerRegistration;
     public ConsumerController.Settings Settings { get; }
     public State CurrentState { get; private set; }
-    private RetryTimer _retryTimer;
-    private Serialization _serialization = Context.System.Serialization;
+    private readonly RetryTimer _retryTimer;
+    private readonly Serialization _serialization = Context.System.Serialization;
     public bool ResendLost => !Settings.OnlyFlowControl;
 
     public ConsumerController(Option<IActorRef> producerControllerRegistration, ConsumerController.Settings settings)
