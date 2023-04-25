@@ -556,5 +556,63 @@ public class ConsumerControllerSpecs : TestKit
         (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).Message.Payload.Should().Be("123");
         consumerController.Tell(ConsumerController.Confirmed.Instance);
         await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(3, 22, true, false));
+        
+        // going to ACK the chunks this time
+        var chunks2 = ProducerController<Job>.CreateChunks(new Job("45"), chunkSize: 1, Sys.Serialization);
+        var seqMessages2 = chunks2.Select((c, i) =>
+            ConsumerController.SequencedMessage<Job>.FromChunkedMessage(ProducerId, 4 + i, c, false, true,
+                producerControllerProbe)).ToList();
+        
+        consumerController.Tell(seqMessages2.First());
+        consumerController.Tell(seqMessages2[1]);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).Message.Payload.Should().Be("45");
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Ack(5));
+    }
+
+    [Fact]
+    public async Task
+        ConsumerController_with_ChunkedMessages_must_send_Request_after_half_window_size_when_many_chunks()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None),
+            $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        
+        // one chunk for each letter, => 25 chunks
+        var chunks1 =
+            ProducerController<Job>.CreateChunks(new Job("1234567890123456789012345"), chunkSize: 1, Sys.Serialization);
+        var seqMessages1 = chunks1.Select((c, i) =>
+            ConsumerController.SequencedMessage<Job>.FromChunkedMessage(ProducerId, 1 + i, c, i == 0, false,
+                producerControllerProbe)).ToList();
+        
+        consumerController.Tell(seqMessages1.First());
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 20, true, false));
+        await producerControllerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100)); // no more Request yet
+        foreach(var i in Enumerable.Range(1,8))
+            consumerController.Tell(seqMessages1[i]);
+        await producerControllerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100)); // sent 9, no more Request yet
+        
+        consumerController.Tell(seqMessages1[9]);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 30, true, false));
+        
+        foreach(var i in Enumerable.Range(10,8))
+            consumerController.Tell(seqMessages1[i]);
+        await producerControllerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100)); // sent 19, no more Request yet
+        
+        consumerController.Tell(seqMessages1[18]);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 40, true, false));
+        
+        // not sending more for a while, timeout will trigger a new Request
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 40, true, true));
+
+        foreach(var i in Enumerable.Range(20,4))
+            consumerController.Tell(seqMessages1[i]);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).Message.Payload.Should()
+            .Be("1234567890123456789012345");
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
     }
 }
