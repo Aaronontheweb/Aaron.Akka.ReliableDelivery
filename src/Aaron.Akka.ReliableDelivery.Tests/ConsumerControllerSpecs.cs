@@ -435,4 +435,35 @@ public class ConsumerControllerSpecs : TestKit
         (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(46);
         consumerController.Tell(ConsumerController.Confirmed.Instance);
     }
+
+    [Fact]
+    public async Task ConsumerController_should_send_Ack_when_stopped()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        await producerControllerProbe.ExpectMsgAsync<ProducerController.Request>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync<ProducerController.Request>();
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 2, producerControllerProbe));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 3, producerControllerProbe));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        
+        // now we know that the ConsumerController has received Confirmed for 2,
+        // and 3 is still not confirmed
+        Sys.Stop(consumerController);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Ack(2));
+    }
+    
+    public async Task 
 }
