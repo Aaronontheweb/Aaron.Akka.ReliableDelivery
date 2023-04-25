@@ -599,17 +599,17 @@ public class ConsumerControllerSpecs : TestKit
         consumerController.Tell(seqMessages1[9]);
         await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 30, true, false));
         
-        foreach(var i in Enumerable.Range(10,8))
+        for(var i = 10; i < 19; i++)
             consumerController.Tell(seqMessages1[i]);
         await producerControllerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100)); // sent 19, no more Request yet
         
-        consumerController.Tell(seqMessages1[18]);
+        consumerController.Tell(seqMessages1[19]);
         await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 40, true, false));
         
         // not sending more for a while, timeout will trigger a new Request
         await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 40, true, true));
 
-        foreach(var i in Enumerable.Range(20,4))
+        for(var i = 20; i < 25; i++)
             consumerController.Tell(seqMessages1[i]);
         (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).Message.Payload.Should()
             .Be("1234567890123456789012345");

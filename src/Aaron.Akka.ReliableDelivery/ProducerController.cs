@@ -238,6 +238,8 @@ public static class ProducerController
         {
             return FromSeqNr.GetHashCode();
         }
+        
+        public override string ToString() => $"Resend({FromSeqNr})";
     }
     
     /// <summary>
