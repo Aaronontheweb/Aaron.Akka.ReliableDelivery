@@ -34,14 +34,14 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
         _producerControllerRegistration = producerControllerRegistration;
         Settings = settings;
         _retryTimer = new RetryTimer(Settings.ResendIntervalMin, Settings.ResendIntervalMax, Timers);
-
-        // this Timer will get overwritten by the RetryTimer once we exit the WaitForStart stage
-        Timers.StartPeriodicTimer(Retry.Instance, Retry.Instance, settings.ResendIntervalMin);
+        
         WaitForStart();
     }
 
     private void WaitForStart()
     {
+        // this Timer will get overwritten by the RetryTimer once we exit the WaitForStart stage
+        Timers.StartPeriodicTimer(Retry.Instance, Retry.Instance, Settings.ResendIntervalMin);
         var stopping = false;
 
         Receive<RegisterToProducerController<T>>(reg =>
@@ -58,6 +58,7 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             _log.Debug("Received Start, unstash [{0}] messages", Stash.Count);
             CurrentState = InitialState(start, _producerControllerRegistration, stopping);
             Stash.Unstash();
+            Timers.CancelAll(); // clear recurring timers
             Become(Active);
         });
 
@@ -109,6 +110,8 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
     /// </summary>
     private void Active()
     {
+        _retryTimer.Start();
+        
         Receive<SequencedMessage<T>>(seqMsg =>
         {
             var pid = seqMsg.ProducerId;
