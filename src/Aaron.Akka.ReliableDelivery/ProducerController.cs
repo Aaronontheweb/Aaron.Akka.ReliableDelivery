@@ -213,7 +213,7 @@ public static class ProducerController
     {
     }
 
-    internal sealed class Resend : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression
+    internal sealed class Resend : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression, IEquatable<Resend>
     {
         public Resend(long fromSeqNr)
         {
@@ -221,6 +221,23 @@ public static class ProducerController
         }
 
         public long FromSeqNr { get; }
+
+        public bool Equals(Resend? other)
+        {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return FromSeqNr == other.FromSeqNr;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return ReferenceEquals(this, obj) || obj is Resend other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            return FromSeqNr.GetHashCode();
+        }
     }
     
     internal sealed class Ack : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression

@@ -6,6 +6,7 @@ using Akka.Actor;
 using Akka.Configuration;
 using Akka.TestKit.Xunit2;
 using Akka.Util;
+using FluentAssertions;
 using Xunit;
 using Xunit.Abstractions;
 using static Aaron.Akka.ReliableDelivery.Tests.TestConsumer;
@@ -123,6 +124,42 @@ public class ConsumerControllerSpecs : TestKit
         await producerControllerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
         consumerController.Tell(ConsumerController.Confirmed.Instance);
         await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(windowSize/2, windowSize + windowSize/2, true, false));
+    }
 
+    [Fact]
+    public async Task ConsumerController_should_detect_lost_message()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe.Ref));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 20, true, false));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(1, 20, true, false));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 2, producerControllerProbe));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        // skip messages 3 and 4
+        consumerController.Tell(SequencedMessage(ProducerId, 5, producerControllerProbe));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Resend(3));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 3, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 4, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 5, producerControllerProbe));
+        
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(3);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(4);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(5);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
     }
 }
