@@ -592,7 +592,8 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
                 curIndex += b.Count;
             }
 
-            bytes = memory.ToArray();
+            // have to slice the buffer here since the memory pool may have allocated more than we needed
+            bytes = memory.Slice(0, curIndex).ToArray();
         }
 
         var headMessage = reverseCollectedChunks.First(); // this is the last chunk

@@ -194,7 +194,7 @@ public sealed class TestSerializer : SerializerWithStringManifest
                 delivery-test = ""Aaron.Akka.ReliableDelivery.Tests.TestSerializer, Aaron.Akka.ReliableDelivery.Tests""
             }
             serialization-bindings {
-                ""Aaron.Akka.ReliableDelivery.Tests.TestConsumer+Job"" = delivery-test
+                ""Aaron.Akka.ReliableDelivery.Tests.TestConsumer+Job, Aaron.Akka.ReliableDelivery.Tests"" = delivery-test
             }
         }");
     
