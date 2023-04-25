@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Event;
 using Akka.Pattern;
@@ -308,8 +309,33 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             {
                 _log.Debug("Stopped at seqNr [{0}], after delivery of buffered messages.", seqNr);
                 // best effort to Ack latest confirmed when stopping
-                CurrentState.ProducerController.Tell(new Ack(seqNr));
-                Context.Stop(Self);
+                
+                /*
+                 * NOTE: this is not the same as Akka.Typed Behaviors.Stopped, which executes after actor PostStop
+                 * seqNr returned here is a higher seqNr than what's returned in PostStop (the highest confirmed seqNr),
+                 * therefore we're going to attempt to recreate those semantics using `GracefulStop` and a detached task
+                 */
+                
+                async Task ShutDownAndStop()
+                {
+                    var producerController = CurrentState.ProducerController;
+                    var ack = new Ack(seqNr);
+                    
+                    try
+                    {
+                        Context.Stop(Self);
+                        await Self.WatchAsync();
+                    }
+                    finally
+                    {
+                        producerController.Tell(ack);
+                    }
+                }
+
+#pragma warning disable CS4014
+                ShutDownAndStop(); // needs to run as a detached task
+#pragma warning restore CS4014
+
             }
             else
             {
@@ -362,7 +388,7 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             ReceiveRegisterToProducerController(controller, () => WaitingForConfirmation(sequencedMessage));
         });
 
-        Receive<DeliverThenStop<T>>(stop => { ReceiveDeliverThenStop(Active); });
+        Receive<DeliverThenStop<T>>(stop => { ReceiveDeliverThenStop(() => WaitingForConfirmation(sequencedMessage)); });
     }
 
     protected override void PostStop()
