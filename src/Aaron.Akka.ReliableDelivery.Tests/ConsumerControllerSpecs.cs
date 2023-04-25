@@ -245,4 +245,40 @@ public class ConsumerControllerSpecs : TestKit
         consumerController.Tell(ConsumerController.Confirmed.Instance);
         await consumerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
     }
+
+    [Fact]
+    public async Task ConsumerController_should_optionally_ack_messages()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe, ack:true));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 20, true, false));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(1, 20, true, false));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 2, producerControllerProbe, ack:true));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Ack(2));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 3, producerControllerProbe, ack:true));
+        consumerController.Tell(SequencedMessage(ProducerId, 4, producerControllerProbe, ack:false)); // skip ACK here
+        consumerController.Tell(SequencedMessage(ProducerId, 5, producerControllerProbe, ack:true));
+        
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(3);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Ack(3));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(4);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(5);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Ack(5));
+    }
 }

@@ -240,7 +240,13 @@ public static class ProducerController
         }
     }
     
-    internal sealed class Ack : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression
+    /// <summary>
+    /// INTERNAL API
+    /// </summary>
+    /// <remarks>
+    /// Used when a sequenced message has Ack set to <c>true</c>.
+    /// </remarks>
+    internal sealed class Ack : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression, IEquatable<Ack>
     {
         public Ack(long confirmedSeqNr)
         {
@@ -248,6 +254,23 @@ public static class ProducerController
         }
 
         public long ConfirmedSeqNr { get; }
+
+        public bool Equals(Ack? other)
+        {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return ConfirmedSeqNr == other.ConfirmedSeqNr;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return ReferenceEquals(this, obj) || obj is Ack other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            return ConfirmedSeqNr.GetHashCode();
+        }
     }
     
     
