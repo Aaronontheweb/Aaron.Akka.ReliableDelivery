@@ -351,7 +351,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         Receive<T>(sendNext =>
         {
             CheckReceiveMessageRemainingChunkState();
-            var chunks = Chunk(sendNext, true, _serialization.Value);
+            var chunks = Chunk(sendNext, false, _serialization.Value);
 
             if (DurableProducerQueueRef.IsEmpty)
             {

@@ -5,6 +5,7 @@
 //  </copyright>
 // -----------------------------------------------------------------------
 
+using System;
 using System.Threading.Tasks;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
@@ -14,6 +15,7 @@ using Akka.Util;
 using FluentAssertions;
 using Xunit;
 using Xunit.Abstractions;
+using static Aaron.Akka.ReliableDelivery.Tests.TestConsumer;
 
 namespace Aaron.Akka.ReliableDelivery.Tests;
 
@@ -35,18 +37,18 @@ public class ProducerControllerSpec : TestKit
     public async Task ProducerController_must_resend_lost_initial_SequencedMessage()
     {
         NextId();
-        var consumerProbe = CreateTestProbe();
+        var consumerControllerProbe = CreateTestProbe();
 
-        var producerController = Sys.ActorOf(ProducerController.Create<TestConsumer.Job>(Sys, ProducerId, Option<Props>.None), $"producerController-{_idCount}");
+        var producerController = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, Option<Props>.None), $"producerController-{_idCount}");
         var producerProbe = CreateTestProbe();
-        producerController.Tell(new ProducerController.Start<TestConsumer.Job>(producerProbe.Ref));
-        producerController.Tell(new ProducerController.RegisterConsumer<TestConsumer.Job>(consumerProbe.Ref));
+        producerController.Tell(new ProducerController.Start<Job>(producerProbe.Ref));
+        producerController.Tell(new ProducerController.RegisterConsumer<Job>(consumerControllerProbe.Ref));
 
-        var sendTo = (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<TestConsumer.Job>>())
+        var sendTo = (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>())
             .SendNextTo;
-        sendTo.Tell(new TestConsumer.Job("msg-1"));
+        sendTo.Tell(new Job("msg-1"));
         
-        var seqMsg = await consumerProbe.ExpectMsgAsync<ConsumerController.SequencedMessage<TestConsumer.Job>>();
+        var seqMsg = await consumerControllerProbe.ExpectMsgAsync<ConsumerController.SequencedMessage<Job>>();
 
         seqMsg.ProducerId.Should().Be(ProducerId);
         seqMsg.SeqNr.Should().Be(1);
@@ -54,8 +56,10 @@ public class ProducerControllerSpec : TestKit
         
         // the ConsumerController will send initial `Request` back, but if that is lost or if the first
         // `SequencedMessage` is lost the ProducerController will resend the SequencedMessage
-       
-        // TODO: need to implement the ConsumerController to implement this test
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 1, producerController));
+        
+        producerController.Tell(new ProducerController.Request(1L, 10L, true, false));
+        await consumerControllerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(1100));
     }
 
 }
