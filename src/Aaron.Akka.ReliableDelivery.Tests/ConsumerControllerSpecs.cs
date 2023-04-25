@@ -193,4 +193,56 @@ public class ConsumerControllerSpecs : TestKit
         await producerControllerProbe.ExpectNoMsgAsync(TimeSpan.FromSeconds(1.1));
         await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(3, 20, true, true));
     }
+
+    [Fact]
+    public async Task ConsumerController_should_stash_while_waiting_for_consumer_confirmation()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 20, true, false));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(1, 20, true, false));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 2, producerControllerProbe));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        
+        // deliver messages to be stashed while we wait for the consumer's confirmation
+        consumerController.Tell(SequencedMessage(ProducerId, 3, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 4, producerControllerProbe));
+        await consumerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(3);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(4);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 5, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 6, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 7, producerControllerProbe));
+        
+        // ProducerController may resend unconfirmed
+        consumerController.Tell(SequencedMessage(ProducerId, 5, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 6, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 7, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 8, producerControllerProbe));
+        
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(5);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(6);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(7);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(8);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await consumerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+    }
 }
