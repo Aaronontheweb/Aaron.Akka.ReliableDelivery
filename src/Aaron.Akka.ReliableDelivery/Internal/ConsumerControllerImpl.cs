@@ -596,8 +596,12 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             bytes = memory.Slice(0, curIndex).ToArray();
         }
 
-        var headMessage = reverseCollectedChunks.First(); // this is the last chunk
+        var headMessage = collectedChunks.Last(); // this is the last chunk
         var headChunk = headMessage.Message.Chunk!.Value;
+        
+        // serialization exceptions are thrown, because it will anyway be stuck with same error if retried and
+        // we can't just ignore the message
+        
         var message = (T)_serialization.Deserialize(bytes, headChunk.SerializerId, headChunk.Manifest);
         return new SequencedMessage<T>(headMessage.ProducerId, headMessage.SeqNr, message, headMessage.First,
             headMessage.Ack, headMessage.ProducerController);
