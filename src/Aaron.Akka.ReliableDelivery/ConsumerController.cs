@@ -5,17 +5,58 @@
 //  </copyright>
 // -----------------------------------------------------------------------
 
+using System;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Annotations;
+using Akka.Configuration;
 using Akka.Event;
+using Akka.Util;
 
 namespace Aaron.Akka.ReliableDelivery;
 
 public static class ConsumerController
 {
+    internal static void AssertLocalConsumer(IActorRef consumer)
+    {
+        if (consumer is IActorRefScope { IsLocal: false })
+            throw new ArgumentException(
+                $"Consumer [{consumer}] must be local");
+    }
+    
+    public static Props Create<T>(IActorRefFactory actorRefFactory, Option<IActorRef> producerControllerReference, Settings? settings = null)
+    {
+        Props p;
+        switch (actorRefFactory)
+        {
+            case IActorContext context:
+                p = ConsumerControllerProps<T>(context, producerControllerReference, settings);
+                break;
+            case ActorSystem system:
+                p = ConsumerControllerProps<T>(system, producerControllerReference, settings);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(actorRefFactory), $"Unrecognized IActorRefFactory: {actorRefFactory} - this is probably a bug.");
+        }
+
+        return p;
+    }
+
+    public static Props ConsumerControllerProps<T>(IActorContext context, Option<IActorRef> producerControllerReference, Settings? settings = null)
+    {
+        return ConsumerControllerProps<T>(context.System, producerControllerReference, settings);
+    }
+
+    public static Props ConsumerControllerProps<T>(ActorSystem system, Option<IActorRef> producerControllerReference, Settings? settings = null)
+    {
+        var realSettings = settings ?? ConsumerController.Settings.Create(system);
+        // need to set the stash size equal to the flow control window
+        return Props.Create(() => new ConsumerController<T>(producerControllerReference, realSettings))
+            .WithStashCapacity(realSettings.FlowControlWindow);
+    }
+    
     /// <summary>
-    ///     Commands that are specific to the consumer side of the <see cref="ReliableDelivery" /> pattern.
+    ///     Commands that are specific to the consumer side of the <see cref="RdConfig" /> pattern.
     /// </summary>
     /// <typeparam name="T">The type of messages the consumer manages.</typeparam>
     public interface IConsumerCommand<T>
@@ -27,12 +68,25 @@ public static class ConsumerController
     /// </summary>
     public sealed class Start<T> : IConsumerCommand<T>
     {
-        public Start(IActorRef consumer)
+        public Start(IActorRef deliverTo)
         {
-            Consumer = consumer;
+            DeliverTo = deliverTo;
         }
 
-        public IActorRef Consumer { get; }
+        public IActorRef DeliverTo { get; }
+    }
+    
+    /// <summary>
+    /// Instructs the <see cref="ConsumerController{T}"/> to register itself with the <see cref="ProducerController{T}"/>.
+    /// </summary>
+    public sealed class RegisterToProducerController<T> : IConsumerCommand<T>
+    {
+        public RegisterToProducerController(IActorRef producerController)
+        {
+            ProducerController = producerController;
+        }
+
+        public IActorRef ProducerController { get; }
     }
 
     /// <summary>
@@ -41,6 +95,13 @@ public static class ConsumerController
     [InternalApi]
     public sealed class SequencedMessage<T> : IConsumerCommand<T>, IDeliverySerializable, IDeadLetterSuppression
     {
+        internal SequencedMessage(string producerId, long seqNr, MessageOrChunk<T> messageOrChunk, bool first, bool ack,
+            IActorRef producerController)
+            : this(producerId, seqNr, messageOrChunk, first, ack)
+        {
+            ProducerController = producerController;
+        }
+
         public SequencedMessage(string producerId, long seqNr, MessageOrChunk<T> messageOrChunk, bool first, bool ack)
         {
             SeqNr = seqNr;
@@ -59,14 +120,27 @@ public static class ConsumerController
 
         public bool Ack { get; }
 
-        internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true };
+        internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true } || Message.IsMessage;
 
-        internal bool IsLastChunk => Message.Chunk is { LastChunk: true };
+        internal bool IsLastChunk => Message.Chunk is { LastChunk: true } || Message.IsMessage;
+
+        /// <summary>
+        /// TESTING ONLY
+        /// </summary>
+        internal IActorRef ProducerController { get; } = ActorRefs.Nobody;
 
         internal static SequencedMessage<T> FromChunkedMessage(string producerId, long seqNr,
-            ChunkedMessage chunkedMessage, bool first, bool ack)
+            ChunkedMessage chunkedMessage, bool first, bool ack, IActorRef producerController)
         {
-            return new SequencedMessage<T>(producerId, seqNr, chunkedMessage, first, ack);
+            return new SequencedMessage<T>(producerId, seqNr, chunkedMessage, first, ack, producerController);
+        }
+        
+        /// <summary>
+        /// INTERNAL API
+        /// </summary>
+        internal SequencedMessage<T> AsFirst()
+        {
+            return new(ProducerId, SeqNr, Message, true, Ack, ProducerController);
         }
     }
 
@@ -75,10 +149,11 @@ public static class ConsumerController
     /// </summary>
     public sealed class Delivery<T> : IConsumerCommand<T>, IDeliverySerializable, IDeadLetterSuppression
     {
-        public Delivery(long seqNr, string producerId, T message)
+        public Delivery(T message, IActorRef confirmTo, string producerId, long seqNr)
         {
             SeqNr = seqNr;
             Message = message;
+            ConfirmTo = confirmTo;
             ProducerId = producerId;
         }
 
@@ -86,45 +161,93 @@ public static class ConsumerController
 
         public string ProducerId { get; }
         public T Message { get; }
+        
+        public IActorRef ConfirmTo { get; }
 
-        /// <summary>
-        ///     Creates a confirmation message that can be sent back to the producer.
-        /// </summary>
-        public Confirmed<T> Confirmation => new(ProducerId, SeqNr);
+        public override string ToString()
+        {
+            return $"Delivery({Message}, {ConfirmTo}, {ProducerId}, {SeqNr})";
+        }
+    }
+
+    /// <summary>
+    /// Deliver all buffered messages to consumer then shutdown.
+    /// </summary>
+    public sealed class DeliverThenStop<T> : IConsumerCommand<T>
+    {
+        private DeliverThenStop()
+        {
+        }
+        public static readonly DeliverThenStop<T> Instance = new();
     }
 
     /// <summary>
     ///     Acknowledgement of a message that was received by the consumer, sent to the ConsumerController.
     /// </summary>
-    public sealed class Confirmed<T> : IConsumerCommand<T>
+    public sealed class Confirmed
     {
-        public Confirmed(string producerId, long confirmedSeqNr)
+        public static readonly Confirmed Instance = new();
+
+        private Confirmed()
         {
-            ProducerId = producerId;
-            ConfirmedSeqNr = confirmedSeqNr;
         }
-
-        public string ProducerId { get; }
-
-        public long ConfirmedSeqNr { get; }
     }
 
     /// <summary>
-    ///     Send from the ConsumerController to the ProducerController to request more messages.
+    /// ConsumerController settings.
     /// </summary>
-    public sealed class Request<T> : IDeliverySerializable, IDeadLetterSuppression
+    public sealed class Settings
     {
-        public Request(string producerId, long fromSeqNr, long confirmedSeqNr)
+        public static Settings Create(ActorSystem actorSystem)
         {
-            ProducerId = producerId;
-            FromSeqNr = fromSeqNr;
-            ConfirmedSeqNr = confirmedSeqNr;
+            return Create(actorSystem.Settings.Config.GetConfig("akka.reliable-delivery.consumer-controller")!);
+        }
+        
+        public static Settings Create(Config config)
+        {
+            return new Settings(config.GetInt("flow-control-window"), config.GetTimeSpan("resend-interval-min"),
+                config.GetTimeSpan("resend-interval-max"), config.GetBoolean("only-flow-control"));
         }
 
-        public string ProducerId { get; }
+        private Settings(int flowControlWindow, TimeSpan resendIntervalMin, TimeSpan resendIntervalMax,
+            bool onlyFlowControl)
+        {
+            FlowControlWindow = flowControlWindow;
+            ResendIntervalMin = resendIntervalMin;
+            ResendIntervalMax = resendIntervalMax;
+            OnlyFlowControl = onlyFlowControl;
+        }
 
-        public long FromSeqNr { get; }
+        public int FlowControlWindow { get; }
 
-        public long ConfirmedSeqNr { get; }
+        public TimeSpan ResendIntervalMin { get; }
+
+        public TimeSpan ResendIntervalMax { get; }
+
+        public bool OnlyFlowControl { get; }
+        
+        // add method to copy with new FlowControlWindow
+        public Settings WithFlowControlWindow(int flowControlWindow)
+        {
+            return new Settings(flowControlWindow, ResendIntervalMin, ResendIntervalMax, OnlyFlowControl);
+        }
+        
+        // add method to copy with new ResendIntervalMin
+        public Settings WithResendIntervalMin(TimeSpan resendIntervalMin)
+        {
+            return new Settings(FlowControlWindow, resendIntervalMin, ResendIntervalMax, OnlyFlowControl);
+        }
+        
+        // add method to copy with new ResendIntervalMax
+        public Settings WithResendIntervalMax(TimeSpan resendIntervalMax)
+        {
+            return new Settings(FlowControlWindow, ResendIntervalMin, resendIntervalMax, OnlyFlowControl);
+        }
+        
+        // add method to copy with new OnlyFlowControl
+        public Settings WithOnlyFlowControl(bool onlyFlowControl)
+        {
+            return new Settings(FlowControlWindow, ResendIntervalMin, ResendIntervalMax, onlyFlowControl);
+        }
     }
 }

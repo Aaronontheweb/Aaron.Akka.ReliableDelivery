@@ -6,19 +6,13 @@
 // -----------------------------------------------------------------------
 
 using System;
-using System.Collections.Generic;
-using System.Collections.Immutable;
-using System.Linq;
-using System.Threading;
 using System.Threading.Channels;
+using System.Threading.Tasks;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
+using Akka.Configuration;
 using Akka.Event;
-using Akka.IO;
-using Akka.Pattern;
-using Akka.Serialization;
 using Akka.Util;
-using Microsoft.Extensions.ObjectPool;
 
 namespace Aaron.Akka.ReliableDelivery;
 
@@ -31,21 +25,71 @@ public static class ProducerController
                 $"Producer [{producer}] must be local");
     }
 
-    // TODO: HOCON configuration
+    public static Props Create<T>(IActorRefFactory actorRefFactory, string producerId,
+        Option<Props> durableProducerQueue, Settings? settings = null,
+        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+    {
+        Props p;
+        switch (actorRefFactory)
+        {
+            case IActorContext context:
+                p = ProducerControllerProps(context, producerId, durableProducerQueue, settings, sendAdapter);
+                break;
+            case ActorSystem system:
+                p = ProducerControllerProps(system, producerId, durableProducerQueue, settings, sendAdapter);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(actorRefFactory), $"Unrecognized IActorRefFactory: {actorRefFactory} - this is probably a bug.");
+        }
+
+        return p;
+    }
+    
+    private static Props ProducerControllerProps<T>(IActorContext context, string producerId, Option<Props> durableProducerQueue, Settings? settings = null,
+        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+    {
+        return ProducerControllerProps(context.System, producerId, durableProducerQueue, settings, sendAdapter);
+    }
+
+    private static Props ProducerControllerProps<T>(ActorSystem actorSystem, string producerId, Option<Props> durableProducerQueue, Settings? settings = null,
+        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+    {
+        return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, settings, DateTimeOffsetNowTimeProvider.Instance, sendAdapter));   
+    }
+    
     public sealed class Settings
     {
         public const int DefaultDeliveryBufferSize = 128;
 
-        public Settings(bool requireConfirmationsToProducer, TimeSpan durableQueueRequestTimeout,
-            int durableQueueAttemptRetries, TimeSpan durableQueueResendFirstInterval, int deliveryBufferSize = DefaultDeliveryBufferSize,
+        public static Settings Create(ActorSystem actorSystem)
+        {
+            return Create(actorSystem.Settings.Config.GetConfig("akka.reliable-delivery.producer-controller")!);
+        }
+
+        public static Settings Create(Config config)
+        {
+            var chunkLargeMessageBytes = config.GetString("chunk-large-messages") switch {
+                "off" => 0,
+                _ => (config.GetByteSize("chunk-large-messages") ?? throw new ArgumentException("chunk-large-messages must be set to a valid byte size")),
+            };
+            
+            if(chunkLargeMessageBytes > int.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(config),"Too large chunk-large-messages value. Must be less than 2GB");
+
+            return new Settings(durableQueueRequestTimeout: config.GetTimeSpan("durable-queue.request-timeout"),
+                durableQueueRetryAttempts: config.GetInt("durable-queue.retry-attempts"),
+                durableQueueResendFirstInterval: config.GetTimeSpan("durable-queue.resend-first-interval"),
+                chunkLargeMessagesBytes: (int)chunkLargeMessageBytes);
+        }
+
+        private Settings(TimeSpan durableQueueRequestTimeout,
+            int durableQueueRetryAttempts, TimeSpan durableQueueResendFirstInterval,
             int? chunkLargeMessagesBytes = null)
         {
             ChunkLargeMessagesBytes = chunkLargeMessagesBytes;
-            RequireConfirmationsToProducer = requireConfirmationsToProducer;
             DurableQueueRequestTimeout = durableQueueRequestTimeout;
-            DurableQueueAttemptRetries = durableQueueAttemptRetries;
+            DurableQueueRetryAttempts = durableQueueRetryAttempts;
             DurableQueueResendFirstInterval = durableQueueResendFirstInterval;
-            DeliveryBufferSize = deliveryBufferSize;
         }
 
         /// <summary>
@@ -53,16 +97,7 @@ public static class ProducerController
         ///     into [1,N] chunks of this size.
         /// </summary>
         public int? ChunkLargeMessagesBytes { get; }
-
-        /// <summary>
-        ///     When set to <c>true</c>, ensures that confirmation messages are sent explicitly to the producer.
-        /// </summary>
-        public bool RequireConfirmationsToProducer { get; }
-
-        /// <summary>
-        ///     How many unconfirmed messages can be pending in the buffer before we start backpressuring?
-        /// </summary>
-        public int DeliveryBufferSize { get; }
+        
 
         /// <summary>
         /// The timeout for each request to the durable queue.
@@ -72,7 +107,7 @@ public static class ProducerController
         /// <summary>
         /// Number of retries allowed for each request to the durable queue.
         /// </summary>
-        public int DurableQueueAttemptRetries { get; }
+        public int DurableQueueRetryAttempts { get; }
 
         /// <summary>
         /// Timeframe for re-delivery of the first message
@@ -82,7 +117,7 @@ public static class ProducerController
 
 
     /// <summary>
-    ///     Commands that are specific to the producer side of the <see cref="ReliableDelivery" /> pattern.
+    ///     Commands that are specific to the producer side of the <see cref="RdConfig" /> pattern.
     /// </summary>
     /// <typeparam name="T">The type of messages the producer manages.</typeparam>
     public interface IProducerCommand<T>
@@ -103,41 +138,59 @@ public static class ProducerController
     }
 
     /// <summary>
-    ///     Message send back to the producer in response to a <see cref="Start{T}" /> command.
+    ///     A send instruction sent from the ProducerController to the Producer to request the next message to be sent.
     /// </summary>
-    public sealed class StartProduction<T> : IProducerCommand<T>, INoSerializationVerificationNeeded
+    public sealed class RequestNext<T> : IProducerCommand<T>, INoSerializationVerificationNeeded
     {
-        public StartProduction(string producerId, ChannelWriter<SendNext<T>> writer)
+        public RequestNext(string producerId, long currentSeqNr, long confirmedSeqNr, IActorRef sendNextTo)
         {
             ProducerId = producerId;
-            Writer = writer;
-        }
-
-        public string ProducerId { get; }
-
-        public ChannelWriter<SendNext<T>> Writer { get; }
-    }
-
-    /// <summary>
-    ///     A send instruction sent from Producers to Consumers.
-    /// </summary>
-    public sealed class SendNext<T> : IProducerCommand<T>, INoSerializationVerificationNeeded
-    {
-        public SendNext(T message, IActorRef? sendConfirmationTo)
-        {
-            Message = message;
-            SendConfirmationTo = sendConfirmationTo;
+            CurrentSeqNr = currentSeqNr;
+            ConfirmedSeqNr = confirmedSeqNr;
+            SendNextTo = sendNextTo;
         }
 
         /// <summary>
         ///     The message that will actually be delivered to consumers.
         /// </summary>
-        public T Message { get; }
+        public string ProducerId { get; }
+        
+        /// <summary>
+        /// The current seqNr being handled by the producer controller.
+        /// </summary>
+        public long CurrentSeqNr { get; }
+        
+        /// <summary>
+        /// The highest confirmed seqNr observed by the producer controller.
+        /// </summary>
+        public long ConfirmedSeqNr { get; }
 
         /// <summary>
         ///     If this field is populated, confirmation messages containing the current SeqNo (long) will be sent to this actor.
         /// </summary>
-        public IActorRef? SendConfirmationTo { get; }
+        public IActorRef SendNextTo { get; }
+        
+        // TODO: askNextTo
+    }
+
+    /// <summary>
+    /// For sending with confirmation back to the producer - message is confirmed once it's stored inside the durable queue.
+    /// </summary>
+    /// <remarks>
+    /// Reply message type is a SeqNo (long).
+    /// </remarks>
+    /// <typeparam name="T"></typeparam>
+    public sealed class MessageWithConfirmation<T> : IProducerCommand<T>
+    {
+        public MessageWithConfirmation(T message, IActorRef replyTo)
+        {
+            Message = message;
+            ReplyTo = replyTo;
+        }
+
+        public T Message { get; }
+        
+        public IActorRef ReplyTo { get; }
     }
 
     /// <summary>
@@ -160,7 +213,7 @@ public static class ProducerController
     {
     }
 
-    internal sealed class Resend : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression
+    internal sealed class Resend : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression, IEquatable<Resend>
     {
         public Resend(long fromSeqNr)
         {
@@ -168,9 +221,34 @@ public static class ProducerController
         }
 
         public long FromSeqNr { get; }
+
+        public bool Equals(Resend? other)
+        {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return FromSeqNr == other.FromSeqNr;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return ReferenceEquals(this, obj) || obj is Resend other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            return FromSeqNr.GetHashCode();
+        }
+        
+        public override string ToString() => $"Resend({FromSeqNr})";
     }
     
-    internal sealed class Ack : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression
+    /// <summary>
+    /// INTERNAL API
+    /// </summary>
+    /// <remarks>
+    /// Used when a sequenced message has Ack set to <c>true</c>.
+    /// </remarks>
+    internal sealed class Ack : IInternalCommand, IDeliverySerializable, IDeadLetterSuppression, IEquatable<Ack>
     {
         public Ack(long confirmedSeqNr)
         {
@@ -178,6 +256,23 @@ public static class ProducerController
         }
 
         public long ConfirmedSeqNr { get; }
+
+        public bool Equals(Ack? other)
+        {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return ConfirmedSeqNr == other.ConfirmedSeqNr;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return ReferenceEquals(this, obj) || obj is Ack other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            return ConfirmedSeqNr.GetHashCode();
+        }
     }
     
     
@@ -238,7 +333,37 @@ public static class ProducerController
         /// </summary>
         public bool SupportResend { get; }
         
+        /// <summary>
+        /// Indicates whether or not this <see cref="Request"/> was sent due to timeout.
+        /// </summary>
         public bool ViaTimeout { get; }
+
+        private bool Equals(Request other)
+        {
+            return ConfirmedSeqNo == other.ConfirmedSeqNo && RequestUpToSeqNo == other.RequestUpToSeqNo && SupportResend == other.SupportResend && ViaTimeout == other.ViaTimeout;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return ReferenceEquals(this, obj) || obj is Request other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hashCode = ConfirmedSeqNo.GetHashCode();
+                hashCode = (hashCode * 397) ^ RequestUpToSeqNo.GetHashCode();
+                hashCode = (hashCode * 397) ^ SupportResend.GetHashCode();
+                hashCode = (hashCode * 397) ^ ViaTimeout.GetHashCode();
+                return hashCode;
+            }
+        }
+        
+        public override string ToString()
+        {
+            return $"Request({ConfirmedSeqNo}, {RequestUpToSeqNo}, {SupportResend}, {ViaTimeout})";
+        }
     }
 
     internal sealed class LoadStateReply<T> : IInternalCommand
