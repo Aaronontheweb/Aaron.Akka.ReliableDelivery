@@ -281,4 +281,54 @@ public class ConsumerControllerSpecs : TestKit
         consumerController.Tell(ConsumerController.Confirmed.Instance);
         await producerControllerProbe.ExpectMsgAsync(new ProducerController.Ack(5));
     }
+
+    [Fact]
+    public async Task ConsumerController_should_allow_restart_of_Consumer()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        var consumerProbe1 = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe1));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe));
+        await consumerProbe1.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 20, true, false));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(1, 20, true, false));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 2, producerControllerProbe));
+        await consumerProbe1.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 3, producerControllerProbe));
+        (await consumerProbe1.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(3);
+        
+        // restart consumer, before message 3 is confirmed
+        var consumerProbe2 = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe2));
+        
+        (await consumerProbe2.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(3);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 4, producerControllerProbe));
+        (await consumerProbe2.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(4);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+    }
+
+    [Fact]
+    public async Task ConsumerController_should_stop_ConsumerController_when_consumer_is_stopped_before_first_message()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        Watch(consumerController);
+        
+        var consumerProbe1 = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe1));
+        await consumerProbe1.GracefulStop(RemainingOrDefault);
+
+        await ExpectTerminatedAsync(consumerController);
+    }
 }
