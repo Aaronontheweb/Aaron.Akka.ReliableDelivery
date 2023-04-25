@@ -615,4 +615,37 @@ public class ConsumerControllerSpecs : TestKit
             .Be("1234567890123456789012345");
         consumerController.Tell(ConsumerController.Confirmed.Instance);
     }
+
+    [Fact]
+    public async Task ConsumerController_without_resending_must_accept_lost_message()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None, Settings.WithOnlyFlowControl(true)),
+            $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 20, false, false));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(1, 20, false, false));
+        
+        // skipping 2
+        consumerController.Tell(SequencedMessage(ProducerId, 3, producerControllerProbe));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(3);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 4, producerControllerProbe));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(4);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        // skip many
+        consumerController.Tell(SequencedMessage(ProducerId, 35, producerControllerProbe));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(35);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+    }
 }
