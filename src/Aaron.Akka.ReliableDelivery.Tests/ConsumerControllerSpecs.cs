@@ -331,4 +331,61 @@ public class ConsumerControllerSpecs : TestKit
 
         await ExpectTerminatedAsync(consumerController);
     }
+
+    [Fact]
+    public async Task ConsumerController_should_deduplicate_resend_of_first_message()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 20, true, false));
+        // that Request will typically cancel the resending of first, but in unlucky timing it may happen
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(1, 20, true, false));
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe));
+
+        // deduplicated, expect no message
+        await consumerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        
+        // but if the ProducerController is changed it will not be deduplicated
+        var producerControllerProbe2 = CreateTestProbe();
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe2));
+        await producerControllerProbe2.ExpectMsgAsync(new ProducerController.Request(0, 20, true, false));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe2.ExpectMsgAsync(new ProducerController.Request(1, 20, true, false));
+    }
+
+    [Fact]
+    public async Task ConsumerController_should_request_window_after_first()
+    {
+        var flowControlWindow = Settings.FlowControlWindow;
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, flowControlWindow, true, false));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        // and if the ProducerController is changed
+        var producerControllerProbe2 = CreateTestProbe();
+        consumerController.Tell(SequencedMessage(ProducerId, 23, producerControllerProbe2).AsFirst());
+        await producerControllerProbe2.ExpectMsgAsync(new ProducerController.Request(0, 23 + flowControlWindow - 1, true, false));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        // and if the ProducerController is changed again
+        var producerControllerProbe3 = CreateTestProbe();
+        consumerController.Tell(SequencedMessage(ProducerId, 7, producerControllerProbe3).AsFirst());
+        await producerControllerProbe3.ExpectMsgAsync(new ProducerController.Request(0, 7 + flowControlWindow - 1, true, false));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+    }
 }

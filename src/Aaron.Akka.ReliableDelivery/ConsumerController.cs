@@ -120,7 +120,7 @@ public static class ConsumerController
 
         public bool Ack { get; }
 
-        internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true };
+        internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true } || Message.IsMessage;
 
         internal bool IsLastChunk => Message.Chunk is { LastChunk: true } || Message.IsMessage;
 
@@ -133,6 +133,14 @@ public static class ConsumerController
             ChunkedMessage chunkedMessage, bool first, bool ack, IActorRef producerController)
         {
             return new SequencedMessage<T>(producerId, seqNr, chunkedMessage, first, ack, producerController);
+        }
+        
+        /// <summary>
+        /// INTERNAL API
+        /// </summary>
+        internal SequencedMessage<T> AsFirst()
+        {
+            return new(ProducerId, SeqNr, Message, true, Ack, ProducerController);
         }
     }
 
