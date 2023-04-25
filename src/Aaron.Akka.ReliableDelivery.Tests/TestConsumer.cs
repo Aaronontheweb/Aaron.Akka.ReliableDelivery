@@ -89,7 +89,7 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
         });
     }
 
-    public sealed class Job
+    public sealed class Job : IEquatable<Job>
     {
         public Job(string payload)
         {
@@ -97,6 +97,23 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
         }
 
         public string Payload { get; }
+
+        public bool Equals(Job? other)
+        {
+            if (ReferenceEquals(null, other)) return false;
+            if (ReferenceEquals(this, other)) return true;
+            return Payload == other.Payload;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return ReferenceEquals(this, obj) || obj is Job other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            return Payload.GetHashCode();
+        }
     }
 
     public interface ICommand

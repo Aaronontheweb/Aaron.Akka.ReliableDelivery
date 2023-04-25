@@ -464,6 +464,44 @@ public class ConsumerControllerSpecs : TestKit
         Sys.Stop(consumerController);
         await producerControllerProbe.ExpectMsgAsync(new ProducerController.Ack(2));
     }
-    
-    public async Task 
+
+    [Fact]
+    public async Task ConsumerController_should_support_graceful_stopping()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+
+        Watch(consumerController);
+        
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe));
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        await producerControllerProbe.ExpectMsgAsync<ProducerController.Request>();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync<ProducerController.Request>();
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 2, producerControllerProbe));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).Message.Should().Be(new Job("msg-2"));
+        consumerController.Tell(SequencedMessage(ProducerId, 3, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 4, producerControllerProbe));
+        
+        consumerController.Tell(ConsumerController.DeliverThenStop<Job>.Instance); 
+        
+        consumerController.Tell(ConsumerController.Confirmed.Instance); // msg 2
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).Message.Should().Be(new Job("msg-3"));
+        consumerController.Tell(SequencedMessage(ProducerId, 5, producerControllerProbe));
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).Message.Should().Be(new Job("msg-4"));
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).Message.Should().Be(new Job("msg-5"));
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+
+        await ExpectTerminatedAsync(consumerController);
+
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Ack(4));
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Ack(5));
+    } 
 }
