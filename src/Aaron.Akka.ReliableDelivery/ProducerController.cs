@@ -291,7 +291,37 @@ public static class ProducerController
         /// </summary>
         public bool SupportResend { get; }
         
+        /// <summary>
+        /// Indicates whether or not this <see cref="Request"/> was sent due to timeout.
+        /// </summary>
         public bool ViaTimeout { get; }
+
+        private bool Equals(Request other)
+        {
+            return ConfirmedSeqNo == other.ConfirmedSeqNo && RequestUpToSeqNo == other.RequestUpToSeqNo && SupportResend == other.SupportResend && ViaTimeout == other.ViaTimeout;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return ReferenceEquals(this, obj) || obj is Request other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hashCode = ConfirmedSeqNo.GetHashCode();
+                hashCode = (hashCode * 397) ^ RequestUpToSeqNo.GetHashCode();
+                hashCode = (hashCode * 397) ^ SupportResend.GetHashCode();
+                hashCode = (hashCode * 397) ^ ViaTimeout.GetHashCode();
+                return hashCode;
+            }
+        }
+        
+        public override string ToString()
+        {
+            return $"Request({ConfirmedSeqNo}, {RequestUpToSeqNo}, {SupportResend}, {ViaTimeout})";
+        }
     }
 
     internal sealed class LoadStateReply<T> : IInternalCommand

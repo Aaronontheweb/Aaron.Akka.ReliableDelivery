@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Threading.Tasks;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
@@ -62,5 +63,65 @@ public class ConsumerControllerSpecs : TestKit
         await producerControllerProbe2.ExpectMsgAsync<ProducerController.RegisterConsumer<Job>>();
         var msg = await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
         msg.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        // expected resend
+        await producerControllerProbe2.ExpectMsgAsync<ProducerController.RegisterConsumer<Job>>();
+    }
+
+    [Fact]
+    public async Task ConsumerController_must_resend_initial_Request()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe.Ref));
+
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe.Ref));
+
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 20, true, false));
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(1, 20, true, false));
+        
+        // resend (viaTimeout will be 'true' this time)
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(1, 20, true, true));
+    }
+
+    [Fact]
+    public async Task ConsumerController_must_send_Request_after_half_window_size()
+    {
+        NextId();
+        var windowSize = Settings.FlowControlWindow;
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+
+        var consumerProbe = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+
+        foreach (var i in Enumerable.Range(1, windowSize / 2))
+        {
+            consumerController.Tell(SequencedMessage(ProducerId, i, producerControllerProbe.Ref));
+        }
+
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, windowSize, true, false));
+        foreach (var i in Enumerable.Range(1, windowSize / 2))
+        {
+            await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+            consumerController.Tell(ConsumerController.Confirmed.Instance);
+            if (i == 1)
+            {
+                await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(1, windowSize, true, false));
+            }
+        }
+        
+        await producerControllerProbe.ExpectNoMsgAsync();
+        consumerController.Tell(SequencedMessage(ProducerId, windowSize/2, producerControllerProbe.Ref));
+
+        await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        await producerControllerProbe.ExpectNoMsgAsync();
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(windowSize/2, windowSize + windowSize/2, true, false));
+
     }
 }

@@ -460,7 +460,9 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
             seqMsg.ProducerController.Tell(new Request(0, newRequestedSeqNr, ResendLost, false));
 
             CurrentState = CurrentState.Copy(producerController: seqMsg.ProducerController,
-                producerId: seqMsg.ProducerId, requestedSeqNr: newRequestedSeqNr, confirmedSeqNr: 0L,
+                producerId: seqMsg.ProducerId,
+                receivedSeqNr: seqNr,
+                requestedSeqNr: newRequestedSeqNr, confirmedSeqNr: 0L,
                 registering: CurrentState.UpdatedRegistering(seqMsg));
             Deliver(seqMsg);
         }
