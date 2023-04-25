@@ -60,6 +60,7 @@ public class ConsumerControllerSpecs : TestKit
         var producerControllerProbe2 = CreateTestProbe();
         consumerController.Tell(new ConsumerController.RegisterToProducerController<Job>(producerControllerProbe2.Ref));
         await producerControllerProbe2.ExpectMsgAsync<ProducerController.RegisterConsumer<Job>>();
-        var msg = await consumerProbe.ReceiveOneAsync();
+        var msg = await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        msg.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
     }
 }

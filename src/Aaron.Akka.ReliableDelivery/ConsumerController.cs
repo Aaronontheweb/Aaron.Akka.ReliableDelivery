@@ -122,7 +122,7 @@ public static class ConsumerController
 
         internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true };
 
-        internal bool IsLastChunk => Message.Chunk is { LastChunk: true };
+        internal bool IsLastChunk => Message.Chunk is { LastChunk: true } || Message.IsMessage;
 
         /// <summary>
         /// TESTING ONLY
