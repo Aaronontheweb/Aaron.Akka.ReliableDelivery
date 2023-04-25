@@ -24,14 +24,34 @@ public static class ProducerController
             throw new ArgumentException(
                 $"Producer [{producer}] must be local");
     }
-    
-    public static Props ProducerControllerProps<T>(this IActorContext context, string producerId, Option<Props> durableProducerQueue, Settings? settings = null,
+
+    public static Props Create<T>(IActorRefFactory actorRefFactory, string producerId,
+        Option<Props> durableProducerQueue, Settings? settings = null,
         Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
     {
-        return context.System.ProducerControllerProps(producerId, durableProducerQueue, settings, sendAdapter);
+        Props p;
+        switch (actorRefFactory)
+        {
+            case IActorContext context:
+                p = ProducerControllerProps(context, producerId, durableProducerQueue, settings, sendAdapter);
+                break;
+            case ActorSystem system:
+                p = ProducerControllerProps(system, producerId, durableProducerQueue, settings, sendAdapter);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(actorRefFactory), $"Unrecognized IActorRefFactory: {actorRefFactory} - this is probably a bug.");
+        }
+
+        return p;
+    }
+    
+    private static Props ProducerControllerProps<T>(IActorContext context, string producerId, Option<Props> durableProducerQueue, Settings? settings = null,
+        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+    {
+        return ProducerControllerProps(context.System, producerId, durableProducerQueue, settings, sendAdapter);
     }
 
-    public static Props ProducerControllerProps<T>(this ActorSystem actorSystem, string producerId, Option<Props> durableProducerQueue, Settings? settings = null,
+    private static Props ProducerControllerProps<T>(ActorSystem actorSystem, string producerId, Option<Props> durableProducerQueue, Settings? settings = null,
         Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
     {
         return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, settings, DateTimeOffsetNowTimeProvider.Instance, sendAdapter));   

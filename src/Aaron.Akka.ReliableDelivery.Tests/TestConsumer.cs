@@ -147,11 +147,11 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
         public int MessageCount { get; }
     }
 
-    public static ConsumerController.SequencedMessage<TestConsumer.Job> SequencedMessage(string producerId, long seqNr,
+    public static ConsumerController.SequencedMessage<Job> SequencedMessage(string producerId, long seqNr, IActorRef producerController,
         bool ack = false)
     {
-        return new ConsumerController.SequencedMessage<TestConsumer.Job>(producerId, seqNr, new Job($"msg-{seqNr}"),
-            seqNr == 1, ack);
+        return new ConsumerController.SequencedMessage<Job>(producerId, seqNr, new Job($"msg-{seqNr}"),
+            seqNr == 1, ack, producerController);
     }
 
     private static Predicate<SomeAsyncJob> ConsumerEndCondition(long seqNr) => msg => msg.SeqNr >= seqNr;

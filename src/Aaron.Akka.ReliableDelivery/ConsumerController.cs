@@ -24,12 +24,30 @@ public static class ConsumerController
                 $"Consumer [{consumer}] must be local");
     }
     
-    public static Props ConsumerControllerProps<T>(this IActorContext context, Option<IActorRef> producerControllerReference, Settings? settings = null)
+    public static Props Create<T>(IActorRefFactory actorRefFactory, Option<IActorRef> producerControllerReference, Settings? settings = null)
     {
-        return context.System.ConsumerControllerProps<T>(producerControllerReference, settings);
+        Props p;
+        switch (actorRefFactory)
+        {
+            case IActorContext context:
+                p = ConsumerControllerProps<T>(context, producerControllerReference, settings);
+                break;
+            case ActorSystem system:
+                p = ConsumerControllerProps<T>(system, producerControllerReference, settings);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(actorRefFactory), $"Unrecognized IActorRefFactory: {actorRefFactory} - this is probably a bug.");
+        }
+
+        return p;
     }
 
-    public static Props ConsumerControllerProps<T>(this ActorSystem system, Option<IActorRef> producerControllerReference, Settings? settings = null)
+    public static Props ConsumerControllerProps<T>(IActorContext context, Option<IActorRef> producerControllerReference, Settings? settings = null)
+    {
+        return ConsumerControllerProps<T>(context.System, producerControllerReference, settings);
+    }
+
+    public static Props ConsumerControllerProps<T>(ActorSystem system, Option<IActorRef> producerControllerReference, Settings? settings = null)
     {
         var realSettings = settings ?? ConsumerController.Settings.Create(system);
         // need to set the stash size equal to the flow control window

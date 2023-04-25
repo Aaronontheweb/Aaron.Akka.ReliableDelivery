@@ -1,10 +1,12 @@
 using System.Threading.Tasks;
+using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.TestKit.Xunit2;
 using Akka.Util;
 using Xunit;
 using Xunit.Abstractions;
+using static Aaron.Akka.ReliableDelivery.Tests.TestConsumer;
 
 namespace Aaron.Akka.ReliableDelivery.Tests;
 
@@ -16,7 +18,7 @@ public class ConsumerControllerSpecs : TestKit
         resend-interval-min = 1s
     }";
     
-    public ConsumerControllerSpecs(ITestOutputHelper outputHelper) : base(Config, output: outputHelper)
+    public ConsumerControllerSpecs(ITestOutputHelper outputHelper) : base(Config.WithFallback(TestSerializer.Config).WithFallback(RdConfig.DefaultConfig()), output: outputHelper)
     {
     }
     
@@ -31,8 +33,7 @@ public class ConsumerControllerSpecs : TestKit
     public async Task ConsumerController_must_resend_RegisterConsumer()
     {
         NextId();
-        var consumerControllerProps = Sys.ConsumerControllerProps<TestConsumer.Job>(Option<IActorRef>.None);
-        var consumerController = Sys.ActorOf(consumerControllerProps, $"consumerController-{_idCount}");
+        var consumerController = Sys.ActorOf(ConsumerController.Create<TestConsumer.Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
         var producerControllerProbe = CreateTestProbe();
         
         consumerController.Tell(new ConsumerController.RegisterToProducerController<TestConsumer.Job>(producerControllerProbe.Ref));
@@ -40,5 +41,25 @@ public class ConsumerControllerSpecs : TestKit
         
         // expected resend
         await producerControllerProbe.ExpectMsgAsync<ProducerController.RegisterConsumer<TestConsumer.Job>>();
+    }
+
+    [Fact]
+    public async Task ConsumerController_must_resend_RegisterConsumer_when_changed_to_different_ProducerController()
+    {
+        NextId();
+        var consumerProbe = CreateTestProbe();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe1 = CreateTestProbe();
+
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe.Ref));
+        consumerController.Tell(new ConsumerController.RegisterToProducerController<Job>(producerControllerProbe1.Ref));
+        await producerControllerProbe1.ExpectMsgAsync<ProducerController.RegisterConsumer<Job>>();
+        consumerController.Tell(SequencedMessage(ProducerId, 1, producerControllerProbe1.Ref));
+        
+        // change producer
+        var producerControllerProbe2 = CreateTestProbe();
+        consumerController.Tell(new ConsumerController.RegisterToProducerController<Job>(producerControllerProbe2.Ref));
+        await producerControllerProbe2.ExpectMsgAsync<ProducerController.RegisterConsumer<Job>>();
+        var msg = await consumerProbe.ReceiveOneAsync();
     }
 }
