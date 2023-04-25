@@ -172,8 +172,11 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
         
         Receive<Retry>(retry =>
         {
-            CurrentState = RetryRequest();
-            ReceiveRetry(Active);
+            ReceiveRetry(() =>
+            {
+                CurrentState = RetryRequest();
+                Active();
+            });
         });
 
         Receive<Confirmed>(ReceiveUnexpectedConfirmed);
@@ -606,7 +609,7 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
         {
             Interval = MinBackoff;
             // todo: when we have timers with fixed delays, call it here
-            Timers.StartSingleTimer(Retry.Instance, Retry.Instance, Interval);
+            Timers.StartPeriodicTimer(Retry.Instance, Retry.Instance, Interval);
         }
 
         public void ScheduleNext()
