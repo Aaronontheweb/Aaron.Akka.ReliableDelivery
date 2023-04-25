@@ -579,14 +579,13 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
 
     private SequencedMessage<T> AssembleChunks(ImmutableList<SequencedMessage<T>> collectedChunks)
     {
-        var reverseCollectedChunks = collectedChunks; // no need to actually reverse the list
-        var bufferSize = reverseCollectedChunks.Sum(chunk => chunk.Message.Chunk!.Value.SerializedMessage.Count);
+        var bufferSize = collectedChunks.Sum(chunk => chunk.Message.Chunk!.Value.SerializedMessage.Count);
         byte[] bytes;
         using (var mem = MemoryPool<byte>.Shared.Rent(bufferSize))
         {
             var curIndex = 0;
             var memory = mem.Memory;
-            foreach (var b in reverseCollectedChunks.Select(c => c.Message.Chunk!.Value.SerializedMessage))
+            foreach (var b in collectedChunks.Select(c => c.Message.Chunk!.Value.SerializedMessage))
             {
                 b.CopyTo(ref memory, curIndex, b.Count);
                 curIndex += b.Count;
