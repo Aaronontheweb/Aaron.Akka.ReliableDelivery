@@ -363,7 +363,7 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
     protected override void PostStop()
     {
         // best effort to Ack latest confirmed when stopping
-        CurrentState.ProducerController.Tell(new Ack(CurrentState.ConfirmedSeqNr));
+        CurrentState.ProducerController?.Tell(new Ack(CurrentState.ConfirmedSeqNr));
     }
 
     #region Internal Methods
