@@ -388,4 +388,51 @@ public class ConsumerControllerSpecs : TestKit
         await producerControllerProbe3.ExpectMsgAsync(new ProducerController.Request(0, 7 + flowControlWindow - 1, true, false));
         (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
     }
+
+    [Fact]
+    public async Task ConsumerController_should_handle_first_message_when_waiting_for_lost_resending()
+    {
+        NextId();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var producerControllerProbe = CreateTestProbe();
+        
+        var consumerProbe = CreateTestProbe();
+
+        // while waiting for Start<T> the SequencedMessage will be stashed
+        consumerController.Tell(SequencedMessage(ProducerId, 44, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 41, producerControllerProbe).AsFirst());
+        consumerController.Tell(SequencedMessage(ProducerId, 45, producerControllerProbe));
+        
+        // now the Start<T> arrives
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe));
+        
+        // unstashed 44, 41, 45
+        // 44 is not first, so this will trigger a full Resend, and also clears stashed messages
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Resend(0));
+        consumerController.Tell(SequencedMessage(ProducerId, 41, producerControllerProbe).AsFirst());
+        consumerController.Tell(SequencedMessage(ProducerId, 42, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 43, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 44, producerControllerProbe));
+        consumerController.Tell(SequencedMessage(ProducerId, 45, producerControllerProbe));
+        
+        // 41 is first, which will trigger the initial Request
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(0, 60, true, false));
+        
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(41);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        await producerControllerProbe.ExpectMsgAsync(new ProducerController.Request(41, 60, true, false));
+        
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(42);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(43);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(44);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(45);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+        
+        consumerController.Tell(SequencedMessage(ProducerId, 46, producerControllerProbe));
+        (await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>()).SeqNr.Should().Be(46);
+        consumerController.Tell(ConsumerController.Confirmed.Instance);
+    }
 }
