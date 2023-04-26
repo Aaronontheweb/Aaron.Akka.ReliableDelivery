@@ -6,6 +6,7 @@
 // -----------------------------------------------------------------------
 
 using System;
+using System.Linq;
 using Akka.Actor;
 using Akka.Event;
 using static Aaron.Akka.ReliableDelivery.DurableProducerQueue;
@@ -24,6 +25,11 @@ public static class TestDurableProducerQueue
     {
         return Props.Create(() => new TestDurableProducerQueue<T>(delay, failWhen, initialState));
     }
+
+    public static Props CreateProps<T>(TimeSpan delay, State<T> initialState)
+    {
+        return Props.Create(() => new TestDurableProducerQueue<T>(delay, _ => false, initialState));
+    }
 }
 
 /// <summary>
@@ -38,7 +44,8 @@ public class TestDurableProducerQueue<T> : ReceiveActor
 
     public State<T> CurrentState { get; private set; }
 
-    public TestDurableProducerQueue(TimeSpan delay, Predicate<IDurableProducerQueueCommand<T>> failWhen, State<T> initialState)
+    public TestDurableProducerQueue(TimeSpan delay, Predicate<IDurableProducerQueueCommand<T>> failWhen,
+        State<T> initialState)
     {
         _delay = delay;
         _failWhen = failWhen;
@@ -51,7 +58,7 @@ public class TestDurableProducerQueue<T> : ReceiveActor
         Receive<LoadState<T>>(cmd =>
         {
             MaybeFail(cmd);
-            if(_delay == TimeSpan.Zero)
+            if (_delay == TimeSpan.Zero)
                 cmd.ReplyTo.Tell(CurrentState);
             else
                 Context.System.Scheduler.ScheduleTellOnce(_delay, cmd.ReplyTo, CurrentState, Self);
@@ -61,21 +68,23 @@ public class TestDurableProducerQueue<T> : ReceiveActor
         {
             if (cmd.MessageSent.SeqNr == CurrentState.CurrentSeqNr)
             {
-                _log.Info("StoreMessageSent  seqNr {0}, confirmationQualifier [{1}]", cmd.MessageSent.SeqNr, cmd.MessageSent.ConfirmationQualifier);
+                _log.Info("StoreMessageSent  seqNr {0}, confirmationQualifier [{1}]", cmd.MessageSent.SeqNr,
+                    cmd.MessageSent.ConfirmationQualifier);
                 MaybeFail(cmd);
                 var reply = new StoreMessageSentAck(cmd.MessageSent.SeqNr);
-                if(_delay == TimeSpan.Zero) 
+                if (_delay == TimeSpan.Zero)
                     cmd.ReplyTo.Tell(reply);
                 else
                     Context.System.Scheduler.ScheduleTellOnce(_delay, cmd.ReplyTo, reply, Self);
-                CurrentState = CurrentState.AddMessageSent(cmd.MessageSent.WithTimestamp(TestDurableProducerQueue.TestTimestamp));
+                CurrentState =
+                    CurrentState.AddMessageSent(cmd.MessageSent.WithTimestamp(TestDurableProducerQueue.TestTimestamp));
             }
             else if (cmd.MessageSent.SeqNr == CurrentState.CurrentSeqNr - 1)
             {
                 // already stored, could be a retry after timeout
                 _log.Info("Duplicate seqNr {0}, currentSeqNr [{1}]", cmd.MessageSent.SeqNr, CurrentState.CurrentSeqNr);
                 var reply = new StoreMessageSentAck(cmd.MessageSent.SeqNr);
-                if(_delay == TimeSpan.Zero) 
+                if (_delay == TimeSpan.Zero)
                     cmd.ReplyTo.Tell(reply);
                 else
                     Context.System.Scheduler.ScheduleTellOnce(_delay, cmd.ReplyTo, reply, Self);
@@ -83,28 +92,33 @@ public class TestDurableProducerQueue<T> : ReceiveActor
             else
             {
                 // may happen after failure
-                _log.Info("Ignoring unexpected seqNr {0}, currentSeqNr [{1}]", cmd.MessageSent.SeqNr, CurrentState.CurrentSeqNr);
+                _log.Info("Ignoring unexpected seqNr {0}, currentSeqNr [{1}]", cmd.MessageSent.SeqNr,
+                    CurrentState.CurrentSeqNr);
                 Unhandled(cmd);
             }
         });
 
         Receive<StoreMessageConfirmed<T>>(cmd =>
         {
-            _log.Info("StoreMessageConfirmed seqNr [{0}], confirmationQualifier [{1}]", cmd.SeqNr, cmd.ConfirmationQualifier);
+            _log.Info("StoreMessageConfirmed seqNr [{0}], confirmationQualifier [{1}]", cmd.SeqNr,
+                cmd.ConfirmationQualifier);
             MaybeFail(cmd);
-            CurrentState = CurrentState.AddConfirmed(cmd.SeqNr, cmd.ConfirmationQualifier, TestDurableProducerQueue.TestTimestamp);
+            CurrentState = CurrentState.AddConfirmed(cmd.SeqNr, cmd.ConfirmationQualifier,
+                TestDurableProducerQueue.TestTimestamp);
         });
     }
 
     private void MaybeFail(IDurableProducerQueueCommand<T> cmd)
     {
-        if(_failWhen(cmd))
+        if (_failWhen(cmd))
             throw new Exception($"TestDurableProducerQueue failed at {cmd}");
     }
 
     protected override void PreStart()
     {
         CurrentState = CurrentState.CleanUpPartialChunkedMessages();
-        _log.Info("Starting with seqNr [{0}], confirmedSeqNr [{1}]", CurrentState.CurrentSeqNr, CurrentState.ConfirmedSeqNr);
+        _log.Info("Starting with seqNr [{0}], confirmedSeqNr [{1}]", CurrentState.CurrentSeqNr,
+            string.Join(",",
+                CurrentState.ConfirmedSeqNr.Select(c => $"[{c.Key}] -> (low {c.Value.Item1}, high {c.Value.Item2})")));
     }
 }
