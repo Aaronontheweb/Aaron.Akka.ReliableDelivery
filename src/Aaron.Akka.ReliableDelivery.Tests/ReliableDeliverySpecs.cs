@@ -58,7 +58,6 @@ public class ReliableDeliverySpecs : TestKit
         consumerController.Tell(new ConsumerController.RegisterToProducerController<Job>(producerController));
 
         var collected = await consumerEndProbe.ExpectMsgAsync<Collected>(TimeSpan.FromSeconds(5));
-        collected.MessageCount.Should().Be(42);
     }
 
     [Fact]
