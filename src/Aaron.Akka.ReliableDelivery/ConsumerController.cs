@@ -41,17 +41,35 @@ public static class ConsumerController
 
         return p;
     }
-
-    public static Props ConsumerControllerProps<T>(IActorContext context, Option<IActorRef> producerControllerReference, Settings? settings = null)
+    
+    internal static Props CreateWithFuzzing<T>(IActorRefFactory actorRefFactory, Option<IActorRef> producerControllerReference, Func<object, double> fuzzing, Settings? settings = null)
     {
-        return ConsumerControllerProps<T>(context.System, producerControllerReference, settings);
+        Props p;
+        switch (actorRefFactory)
+        {
+            case IActorContext context:
+                p = ConsumerControllerProps<T>(context, producerControllerReference, settings, fuzzing);
+                break;
+            case ActorSystem system:
+                p = ConsumerControllerProps<T>(system, producerControllerReference, settings, fuzzing);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(actorRefFactory), $"Unrecognized IActorRefFactory: {actorRefFactory} - this is probably a bug.");
+        }
+
+        return p;
     }
 
-    public static Props ConsumerControllerProps<T>(ActorSystem system, Option<IActorRef> producerControllerReference, Settings? settings = null)
+    private static Props ConsumerControllerProps<T>(IActorContext context, Option<IActorRef> producerControllerReference, Settings? settings = null, Func<object, double>? fuzzing = null)
+    {
+        return ConsumerControllerProps<T>(context.System, producerControllerReference, settings, fuzzing);
+    }
+
+    private static Props ConsumerControllerProps<T>(ActorSystem system, Option<IActorRef> producerControllerReference, Settings? settings = null,  Func<object, double>? fuzzing = null)
     {
         var realSettings = settings ?? ConsumerController.Settings.Create(system);
         // need to set the stash size equal to the flow control window
-        return Props.Create(() => new ConsumerController<T>(producerControllerReference, realSettings))
+        return Props.Create(() => new ConsumerController<T>(producerControllerReference, realSettings, fuzzing))
             .WithStashCapacity(realSettings.FlowControlWindow);
     }
     

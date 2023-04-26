@@ -46,20 +46,42 @@ public static class ProducerController
 
         return p;
     }
-
-    private static Props ProducerControllerProps<T>(IActorContext context, string producerId,
+    
+    internal static Props CreateWithFuzzing<T>(IActorRefFactory actorRefFactory, string producerId,
+        Func<object, double> fuzzing,
         Option<Props> durableProducerQueue, Settings? settings = null,
         Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
     {
-        return ProducerControllerProps(context.System, producerId, durableProducerQueue, settings, sendAdapter);
+        Props p;
+        switch (actorRefFactory)
+        {
+            case IActorContext context:
+                p = ProducerControllerProps(context, producerId, durableProducerQueue, settings, sendAdapter, fuzzing);
+                break;
+            case ActorSystem system:
+                p = ProducerControllerProps(system, producerId, durableProducerQueue, settings, sendAdapter, fuzzing);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(actorRefFactory),
+                    $"Unrecognized IActorRefFactory: {actorRefFactory} - this is probably a bug.");
+        }
+
+        return p;
+    }
+
+    private static Props ProducerControllerProps<T>(IActorContext context, string producerId,
+        Option<Props> durableProducerQueue, Settings? settings = null,
+        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null, Func<object, double>? fuzzing = null)
+    {
+        return ProducerControllerProps(context.System, producerId, durableProducerQueue, settings, sendAdapter, fuzzing);
     }
 
     private static Props ProducerControllerProps<T>(ActorSystem actorSystem, string producerId,
         Option<Props> durableProducerQueue, Settings? settings = null,
-        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null, Func<object, double>? fuzzing = null)
     {
         return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, settings,
-            DateTimeOffsetNowTimeProvider.Instance, sendAdapter));
+            DateTimeOffsetNowTimeProvider.Instance, sendAdapter, fuzzing));
     }
 
     public sealed class Settings

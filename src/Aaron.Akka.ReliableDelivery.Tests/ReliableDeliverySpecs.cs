@@ -186,10 +186,11 @@ public class ReliableDeliverySpecs : TestKit
     }
 }
 
+/// <summary>
+/// Re-run the tests with chunking enabled
+/// </summary>
 public class ReliableDeliveryChunkedSpecs : ReliableDeliverySpecs
 {
-    
-    
     public ReliableDeliveryChunkedSpecs(ITestOutputHelper output) : this(output, 
         ConfigurationFactory.ParseString("akka.reliable-delivery.producer-controller.chunk-large-messages = 1b")
             .WithFallback(ReliableDeliverySpecs.Config))

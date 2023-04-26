@@ -25,18 +25,32 @@ internal sealed class ConsumerController<T> : ReceiveActor, IWithTimers, IWithSt
 
     private Option<IActorRef> _producerControllerRegistration;
     public ConsumerController.Settings Settings { get; }
+    
+    /// <summary>
+    /// Used only for testing to simulate network failures.
+    /// </summary>
+    private readonly Func<object, double>? _fuzzingControl;
     public State CurrentState { get; private set; }
     private readonly RetryTimer _retryTimer;
     private readonly Serialization _serialization = Context.System.Serialization;
     public bool ResendLost => !Settings.OnlyFlowControl;
 
-    public ConsumerController(Option<IActorRef> producerControllerRegistration, ConsumerController.Settings settings)
+    public ConsumerController(Option<IActorRef> producerControllerRegistration, ConsumerController.Settings settings, Func<object, double>? fuzzingControl = null)
     {
         _producerControllerRegistration = producerControllerRegistration;
         Settings = settings;
+        _fuzzingControl = fuzzingControl;
         _retryTimer = new RetryTimer(Settings.ResendIntervalMin, Settings.ResendIntervalMax, Timers);
         
         WaitForStart();
+    }
+
+    protected override bool AroundReceive(Receive receive, object message)
+    {
+        // TESTING PURPOSES ONLY - used to simulate network failures.
+        if(_fuzzingControl != null && ThreadLocalRandom.Current.NextDouble() < _fuzzingControl(message))
+            return true;
+        return base.AroundReceive(receive, message);
     }
 
     private void WaitForStart()

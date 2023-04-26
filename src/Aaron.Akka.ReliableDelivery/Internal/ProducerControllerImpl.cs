@@ -34,6 +34,10 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private readonly ILoggingAdapter _log = Context.GetLogger();
 
+    /// <summary>
+    /// Used only for testing to simulate network failures.
+    /// </summary>
+    private readonly Func<object, double>? _fuzzingControl;
     private readonly Func<SequencedMessage<T>, object> _sendAdapter;
     private readonly Lazy<Serialization> _serialization = new(() => Context.System.Serialization);
     private readonly CancellationTokenSource _shutdownCancellation = new();
@@ -42,13 +46,14 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     public ProducerController(string producerId,
         Option<Props> durableProducerQueue, ProducerController.Settings? settings = null, ITimeProvider? timeProvider = null,
-        Func<SequencedMessage<T>, object>? sendAdapter = null)
+        Func<SequencedMessage<T>, object>? sendAdapter = null, Func<object, double>? fuzzingControl = null)
     {
         ProducerId = producerId;
         Settings = settings ?? ProducerController.Settings.Create(Context.System);
         _durableProducerQueueProps = durableProducerQueue;
         _timeProvider = timeProvider ?? DateTimeOffsetNowTimeProvider.Instance;
         _sendAdapter = sendAdapter ?? DefaultSend;
+        _fuzzingControl = fuzzingControl;
 
         // this state gets overridden during the loading sequence, so it's not used at all really
         CurrentState = new State(false, 0, 0, 0, true, 0, ImmutableList<SequencedMessage<T>>.Empty,
@@ -56,6 +61,14 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             ImmutableDictionary<long, IActorRef>.Empty, _ => { }, 0);
 
         WaitingForActivation();
+    }
+
+    protected override bool AroundReceive(Receive receive, object message)
+    {
+        // TESTING PURPOSES ONLY - used to simulate network failures.
+        if(_fuzzingControl != null && ThreadLocalRandom.Current.NextDouble() < _fuzzingControl(message))
+            return true;
+        return base.AroundReceive(receive, message);
     }
 
     public string ProducerId { get; }
