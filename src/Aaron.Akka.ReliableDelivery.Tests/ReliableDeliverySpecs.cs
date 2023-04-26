@@ -7,6 +7,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
@@ -14,6 +15,7 @@ using Akka.Configuration;
 using Akka.TestKit.Xunit2;
 using Akka.Util;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using Xunit;
 using Xunit.Abstractions;
 using static Aaron.Akka.ReliableDelivery.Tests.TestConsumer;
@@ -54,6 +56,27 @@ public class ReliableDeliverySpecs : TestKit
         var collected = await consumerEndProbe.ExpectMsgAsync<Collected>(TimeSpan.FromSeconds(5));
         collected.MessageCount.Should().Be(42);
     }
-    
-    
+
+    [Fact]
+    public async Task ReliableDelivery_must_illustrate_point_to_point_usage_with_ask()
+    {
+        NextId();
+        var consumerEndProbe = CreateTestProbe();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var testConsumer = Sys.ActorOf(TestConsumer.PropsFor(DefaultConsumerDelay, 42, consumerEndProbe.Ref, consumerController), $"destination-{_idCount}");
+
+        var replyProbe = CreateTestProbe();
+        
+        var producerController = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, Option<Props>.None), $"producerController-{_idCount}");
+        var producer = Sys.ActorOf(Props.Create(() => new TestProducerWithAsk(DefaultProducerDelay, replyProbe.Ref, producerController)), $"producer-{_idCount}");
+        
+        consumerController.Tell(new ConsumerController.RegisterToProducerController<Job>(producerController));
+
+        var messageCount = (await consumerEndProbe.ExpectMsgAsync<Collected>(TimeSpan.FromSeconds(5))).MessageCount;
+        if (Chunked)
+            replyProbe.ReceiveN(messageCount, 5.Seconds());
+        else
+            replyProbe.ReceiveN(messageCount, 5.Seconds()).Should().BeEquivalentTo(Enumerable.Range(1, messageCount));
+        
+    }
 }
