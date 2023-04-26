@@ -22,12 +22,12 @@ public class DurableProducerQueueSpecs
         var state1 = State<string>.Empty.AddMessageSent(new MessageSent<string>(1, "a", false, "", 0));
         state1.Unconfirmed.Count.Should().Be(1);
         state1.Unconfirmed.First().Message.Equals("a").Should().BeTrue();
-        state1.CurrentSeqNo.Should().Be(2);
+        state1.CurrentSeqNr.Should().Be(2);
 
         var state2 = state1.AddMessageSent(new MessageSent<string>(2, "b", false, "", 0));
         state2.Unconfirmed.Count.Should().Be(2);
         state2.Unconfirmed.Last().Message.Equals("b").Should().BeTrue();
-        state2.CurrentSeqNo.Should().Be(3);
+        state2.CurrentSeqNr.Should().Be(3);
     }
 
     [Fact]
@@ -38,7 +38,7 @@ public class DurableProducerQueueSpecs
         var state2 = state1.AddConfirmed(1L, "", 0);
         state2.Unconfirmed.Count.Should().Be(1);
         state2.Unconfirmed.First().Message.Equals("b").Should().BeTrue();
-        state2.CurrentSeqNo.Should().Be(3);
+        state2.CurrentSeqNr.Should().Be(3);
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public class DurableProducerQueueSpecs
         state2.Unconfirmed.Count.Should().Be(1);
         state2.Unconfirmed.First().Message.Chunk!.Value.SerializedMessage.Should()
             .BeEquivalentTo(ByteString.FromString("a"));
-        state2.CurrentSeqNo.Should().Be(2);
+        state2.CurrentSeqNr.Should().Be(2);
 
         // replace the 2 incomplete chunks with complete ones
         var state3 = state1.AddMessageSent(MessageSent<string>.FromChunked(2,
@@ -94,6 +94,6 @@ public class DurableProducerQueueSpecs
             .BeEquivalentTo(ByteString.FromString("e"));
         state6.Unconfirmed[3].Message.Chunk!.Value.SerializedMessage.Should()
             .BeEquivalentTo(ByteString.FromString("h"));
-        state6.CurrentSeqNo.Should().Be(5);
+        state6.CurrentSeqNr.Should().Be(5);
     }
 }

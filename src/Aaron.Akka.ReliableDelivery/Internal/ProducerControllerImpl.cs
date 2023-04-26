@@ -614,10 +614,10 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         var timeout = Settings.DurableQueueRequestTimeout;
         durableProducerQueue.OnSuccess(@ref =>
         {
-            object Mapper(IActorRef r) => new DurableProducerQueue.LoadState<T>(r);
+            DurableProducerQueue.LoadState<T> Mapper(IActorRef r) => new DurableProducerQueue.LoadState<T>(r);
 
             var self = Self;
-            @ref.Ask<DurableProducerQueue.State<T>>((Func<IActorRef, object>)Mapper, timeout: timeout)
+            @ref.Ask<DurableProducerQueue.State<T>>(Mapper, timeout: timeout, cancellationToken:default)
                 .PipeTo(self, success: state => new LoadStateReply<T>(state),
                     failure: ex => new LoadStateFailed(attempt)); // timeout
         });
@@ -646,8 +646,8 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             consumerController.Tell(msg);
         }
 
-        return new State(false, loadedState.CurrentSeqNo, loadedState.HighestConfirmedSeqNo, 1L, true,
-            loadedState.HighestConfirmedSeqNo + 1, unconfirmedBuilder.ToImmutable(), producer,
+        return new State(false, loadedState.CurrentSeqNr, loadedState.HighestConfirmedSeqNr, 1L, true,
+            loadedState.HighestConfirmedSeqNr + 1, unconfirmedBuilder.ToImmutable(), producer,
             ImmutableList<SequencedMessage<T>>.Empty, ImmutableDictionary<long, IActorRef>.Empty, Send, 0);
     }
 
@@ -922,18 +922,21 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         ResendUnconfirmed(CurrentState.Unconfirmed.Where(c => c.SeqNr >= fromSeqNr).ToImmutableList());
         if (fromSeqNr == 0 && !CurrentState.Unconfirmed.IsEmpty)
         {
-            // Scala code just copies the original Unconfirmed value back into the CurrentState here.
+            // need to mark the first unconfirmed message as "first" again, so the delivery-state inside the ConsumerController is correct
+            var newUnconfirmed = ImmutableList.Create(CurrentState.Unconfirmed.First().AsFirst())
+                .AddRange(CurrentState.Unconfirmed.Skip(1));
+            CurrentState = CurrentState.WithUnconfirmed(newUnconfirmed);
         }
     }
 
 
     private void StoreMessageSent(DurableProducerQueue.MessageSent<T> messageSent, int attempt)
     {
-        object Mapper(IActorRef r) => new DurableProducerQueue.StoreMessageSent<T>(messageSent, r);
+        DurableProducerQueue.StoreMessageSent<T> Mapper(IActorRef r) => new DurableProducerQueue.StoreMessageSent<T>(messageSent, r);
 
         var self = Self;
-        DurableProducerQueueRef.Value.Ask<DurableProducerQueue.StoreMessageSentAck>((Func<IActorRef, object>)Mapper,
-                Settings.DurableQueueRequestTimeout)
+        DurableProducerQueueRef.Value.Ask<DurableProducerQueue.StoreMessageSentAck>(Mapper,
+                Settings.DurableQueueRequestTimeout, cancellationToken:default)
             .PipeTo(self, success: ack => new StoreMessageSentCompleted<T>(messageSent),
                 failure: ex => new StoreMessageSentFailed<T>(messageSent, attempt));
     }
