@@ -60,5 +60,12 @@ public class DurableProducerControllerSpecs : TestKit
         await producerProbe.ExpectNoMsgAsync(100);
 
         await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 3, producerController).AsFirst());
+        await consumerControllerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        producerController.Tell(new ProducerController.Request(3L, 13L, true, false));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 4, producerController));
+
+        var sendTo = (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo;
+        sendTo.Tell(new Job("msg-5"));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 5, producerController));
     }
 }

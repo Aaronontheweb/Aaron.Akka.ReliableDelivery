@@ -932,11 +932,11 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private void StoreMessageSent(DurableProducerQueue.MessageSent<T> messageSent, int attempt)
     {
-        object Mapper(IActorRef r) => new DurableProducerQueue.StoreMessageSent<T>(messageSent, r);
+        DurableProducerQueue.StoreMessageSent<T> Mapper(IActorRef r) => new DurableProducerQueue.StoreMessageSent<T>(messageSent, r);
 
         var self = Self;
-        DurableProducerQueueRef.Value.Ask<DurableProducerQueue.StoreMessageSentAck>((Func<IActorRef, object>)Mapper,
-                Settings.DurableQueueRequestTimeout)
+        DurableProducerQueueRef.Value.Ask<DurableProducerQueue.StoreMessageSentAck>(Mapper,
+                Settings.DurableQueueRequestTimeout, cancellationToken:default)
             .PipeTo(self, success: ack => new StoreMessageSentCompleted<T>(messageSent),
                 failure: ex => new StoreMessageSentFailed<T>(messageSent, attempt));
     }
