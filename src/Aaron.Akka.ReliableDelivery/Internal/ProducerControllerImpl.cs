@@ -646,8 +646,8 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             consumerController.Tell(msg);
         }
 
-        return new State(false, loadedState.CurrentSeqNo, loadedState.HighestConfirmedSeqNo, 1L, true,
-            loadedState.HighestConfirmedSeqNo + 1, unconfirmedBuilder.ToImmutable(), producer,
+        return new State(false, loadedState.CurrentSeqNr, loadedState.HighestConfirmedSeqNr, 1L, true,
+            loadedState.HighestConfirmedSeqNr + 1, unconfirmedBuilder.ToImmutable(), producer,
             ImmutableList<SequencedMessage<T>>.Empty, ImmutableDictionary<long, IActorRef>.Empty, Send, 0);
     }
 

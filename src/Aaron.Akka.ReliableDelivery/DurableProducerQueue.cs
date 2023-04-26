@@ -103,18 +103,18 @@ public static class DurableProducerQueue
         public static State<T> Empty { get; } = new(1, 0, ImmutableDictionary<string, (long, long)>.Empty,
             ImmutableList<MessageSent<T>>.Empty);
 
-        public State(long currentSeqNo, long highestConfirmedSeqNo,
+        public State(long currentSeqNr, long highestConfirmedSeqNr,
             ImmutableDictionary<string, (long, long)> confirmedSeqNr, ImmutableList<MessageSent<T>> unconfirmed)
         {
-            CurrentSeqNo = currentSeqNo;
-            HighestConfirmedSeqNo = highestConfirmedSeqNo;
+            CurrentSeqNr = currentSeqNr;
+            HighestConfirmedSeqNr = highestConfirmedSeqNr;
             ConfirmedSeqNr = confirmedSeqNr;
             Unconfirmed = unconfirmed;
         }
 
-        public long CurrentSeqNo { get; }
+        public long CurrentSeqNr { get; }
 
-        public long HighestConfirmedSeqNo { get; }
+        public long HighestConfirmedSeqNr { get; }
 
         public ImmutableDictionary<string, (long, long)> ConfirmedSeqNr { get; }
 
@@ -122,22 +122,22 @@ public static class DurableProducerQueue
 
         public State<T> AddMessageSent(MessageSent<T> messageSent)
         {
-            return new State<T>(messageSent.SeqNr + 1, HighestConfirmedSeqNo,
+            return new State<T>(messageSent.SeqNr + 1, HighestConfirmedSeqNr,
                 ConfirmedSeqNr, Unconfirmed.Add(messageSent));
         }
 
-        public State<T> AddConfirmed(long seqNo, string qualifier, long timestamp)
+        public State<T> AddConfirmed(long seqNr, string qualifier, long timestamp)
         {
-            var newUnconfirmed = Unconfirmed.Where(c => !(c.SeqNr <= seqNo && c.Qualifier == qualifier))
+            var newUnconfirmed = Unconfirmed.Where(c => !(c.SeqNr <= seqNr && c.Qualifier == qualifier))
                 .ToImmutableList();
 
-            return new State<T>(CurrentSeqNo, Math.Max(HighestConfirmedSeqNo, seqNo),
-                ConfirmedSeqNr.SetItem(qualifier, (seqNo, timestamp)), newUnconfirmed);
+            return new State<T>(CurrentSeqNr, Math.Max(HighestConfirmedSeqNr, seqNr),
+                ConfirmedSeqNr.SetItem(qualifier, (seqNr, timestamp)), newUnconfirmed);
         }
 
         public State<T> CleanUp(ISet<string> confirmationQualifiers)
         {
-            return new State<T>(CurrentSeqNo, HighestConfirmedSeqNo, ConfirmedSeqNr.RemoveRange(confirmationQualifiers),
+            return new State<T>(CurrentSeqNr, HighestConfirmedSeqNr, ConfirmedSeqNr.RemoveRange(confirmationQualifiers),
                 Unconfirmed);
         }
 
@@ -151,7 +151,7 @@ public static class DurableProducerQueue
 
             var tmp = ImmutableList.CreateBuilder<MessageSent<T>>();
             var newUnconfirmed = ImmutableList.CreateBuilder<MessageSent<T>>();
-            var newCurrentSeqNr = HighestConfirmedSeqNo + 1;
+            var newCurrentSeqNr = HighestConfirmedSeqNr + 1;
             foreach (var u in Unconfirmed)
                 if (u.IsFirstChunk && u.IsLastChunk)
                 {
@@ -176,7 +176,7 @@ public static class DurableProducerQueue
                     tmp.Clear();
                 }
 
-            return new State<T>(newCurrentSeqNr, HighestConfirmedSeqNo, ConfirmedSeqNr, newUnconfirmed.ToImmutable());
+            return new State<T>(newCurrentSeqNr, HighestConfirmedSeqNr, ConfirmedSeqNr, newUnconfirmed.ToImmutable());
         }
     }
 
