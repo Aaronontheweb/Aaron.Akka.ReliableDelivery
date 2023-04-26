@@ -25,10 +25,14 @@ namespace Aaron.Akka.ReliableDelivery.Tests;
 
 public class ReliableDeliverySpecs : TestKit
 {
-    private static readonly Config Config = @"akka.reliable-delivery.consumer-controller.flow-control-window = 20";
+    internal static readonly Config Config = @"akka.reliable-delivery.consumer-controller.flow-control-window = 20";
 
-    public ReliableDeliverySpecs(ITestOutputHelper output) : base(
-        Config.WithFallback(TestSerializer.Config).WithFallback(RdConfig.DefaultConfig()), output: output)
+    public ReliableDeliverySpecs(ITestOutputHelper output) : this(output, Config)
+    {
+    }
+    
+    protected ReliableDeliverySpecs(ITestOutputHelper output, Config config) : base(
+        config.WithFallback(TestSerializer.Config).WithFallback(RdConfig.DefaultConfig()), output: output)
     {
     }
     
@@ -180,5 +184,20 @@ public class ReliableDeliverySpecs : TestKit
         var delivery4 = await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
         delivery4.Message.Should().Be(new Job("msg-4"));
         delivery4.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+    }
+}
+
+public class ReliableDeliveryChunkedSpecs : ReliableDeliverySpecs
+{
+    
+    
+    public ReliableDeliveryChunkedSpecs(ITestOutputHelper output) : this(output, 
+        ConfigurationFactory.ParseString("akka.reliable-delivery.producer-controller.chunk-large-messages = 1b")
+            .WithFallback(ReliableDeliverySpecs.Config))
+    {
+    }
+
+    protected ReliableDeliveryChunkedSpecs(ITestOutputHelper output, Config config) : base(output, config)
+    {
     }
 }
