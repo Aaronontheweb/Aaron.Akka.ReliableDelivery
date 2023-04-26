@@ -142,6 +142,29 @@ public static class ConsumerController
         {
             return new(ProducerId, SeqNr, Message, true, Ack, ProducerController);
         }
+
+        private bool Equals(SequencedMessage<T> other)
+        {
+            return SeqNr == other.SeqNr && ProducerId == other.ProducerId && Message.Equals(other.Message) && First == other.First && Ack == other.Ack;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return ReferenceEquals(this, obj) || obj is SequencedMessage<T> other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hashCode = SeqNr.GetHashCode();
+                hashCode = (hashCode * 397) ^ ProducerId.GetHashCode();
+                hashCode = (hashCode * 397) ^ Message.GetHashCode();
+                hashCode = (hashCode * 397) ^ First.GetHashCode();
+                hashCode = (hashCode * 397) ^ Ack.GetHashCode();
+                return hashCode;
+            }
+        }
     }
 
     /// <summary>
