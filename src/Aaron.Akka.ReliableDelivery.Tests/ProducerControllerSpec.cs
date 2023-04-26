@@ -62,4 +62,40 @@ public class ProducerControllerSpec : TestKit
         await consumerControllerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(1100));
     }
 
+    [Fact]
+    public async Task ProducerController_should_resend_lost_SequencedMessage_when_receiving_Resend()
+    {
+        NextId();
+        var consumerControllerProbe = CreateTestProbe();
+
+        var producerController = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, Option<Props>.None), $"producerController-{_idCount}");
+        var producerProbe = CreateTestProbe();
+        producerController.Tell(new ProducerController.Start<Job>(producerProbe.Ref));
+        
+        producerController.Tell(new ProducerController.RegisterConsumer<Job>(consumerControllerProbe.Ref));
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>())
+            .SendNextTo.Tell(new Job("msg-1"));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 1, producerController));
+        
+        producerController.Tell(new ProducerController.Request(1L, 10L, true, false));
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo.Tell(new Job("msg-2"));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 2, producerController));
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo.Tell(new Job("msg-3"));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 3, producerController));
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo.Tell(new Job("msg-4"));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 4, producerController));
+        
+        // let's say 3 is lost, when 4 is received the ConsumerController detects the gap and sends Resend(3)
+        producerController.Tell(new ProducerController.Resend(3L));
+        
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 3, producerController));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 4, producerController));
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo.Tell(new Job("msg-5"));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 5, producerController));
+    }
+
 }
