@@ -236,6 +236,14 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
                 Unconfirmed, Producer,
                 RemainingChunks, ReplyAfterStore, Send, storeMessageSentInProgress);
         }
+        
+        // copy state with new FirstSeqNr
+        public State WithFirstSeqNr(long firstSeqNr)
+        {
+            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, SupportResend, firstSeqNr,
+                Unconfirmed, Producer,
+                RemainingChunks, ReplyAfterStore, Send, StoreMessageSentInProgress);
+        }
     }
 
     #endregion
@@ -385,7 +393,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
         Receive<Resend>(resend => ReceiveResend(resend.FromSeqNr));
 
-        Receive<ResendFirst>(_ => ResendFirstMsg());
+        Receive<ResendFirst>(_ => ReceiveResendFirst());
         
         Receive<ResendFirstUnconfirmed>(_ => ReceiveResendFirstUnconfirmed());
 
@@ -643,20 +651,6 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             ImmutableList<SequencedMessage<T>>.Empty, ImmutableDictionary<long, IActorRef>.Empty, Send, 0);
     }
 
-    private void ResendFirstMsg()
-    {
-        if (!CurrentState.Unconfirmed.IsEmpty && CurrentState.Unconfirmed[0].SeqNr == CurrentState.FirstSeqNr)
-        {
-            _log.Debug("Resending first message [{0}]", CurrentState.Unconfirmed[0].SeqNr);
-            CurrentState.Send(CurrentState.Unconfirmed[0]);
-        }
-        else
-        {
-            if (CurrentState.CurrentSeqNr > CurrentState.FirstSeqNr)
-                Timers.Cancel(ResendFirst.Instance);
-        }
-    }
-
     private void ResendUnconfirmed(ImmutableList<SequencedMessage<T>> newUnconfirmed)
     {
         if (!newUnconfirmed.IsEmpty)
@@ -683,7 +677,12 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         if (!CurrentState.Unconfirmed.IsEmpty && CurrentState.Unconfirmed[0].SeqNr == CurrentState.FirstSeqNr)
         {
             _log.Debug("Resending first message [{0}]", CurrentState.Unconfirmed[0].SeqNr);
-            CurrentState.Send(CurrentState.Unconfirmed[0]);
+            CurrentState.Send(CurrentState.Unconfirmed[0].AsFirst());
+        }
+        else
+        {
+            if (CurrentState.CurrentSeqNr > CurrentState.FirstSeqNr)
+                Timers.Cancel(ResendFirst.Instance);
         }
     }
 
@@ -721,7 +720,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             consumerController.Tell(msg);
         }
 
-        CurrentState = CurrentState.WithSend(Send);
+        CurrentState = CurrentState.WithSend(Send).WithFirstSeqNr(newFirstSeqNr);
     }
 
     private void ReceiveSendChunk()
