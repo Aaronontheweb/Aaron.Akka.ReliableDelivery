@@ -79,4 +79,37 @@ public class ReliableDeliverySpecs : TestKit
             replyProbe.ReceiveN(messageCount, 5.Seconds()).Should().BeEquivalentTo(Enumerable.Range(1, messageCount));
         
     }
+
+    private async Task TestWithDelays(TimeSpan producerDelay, TimeSpan consumerDelay)
+    {
+        NextId();
+        var consumerEndProbe = CreateTestProbe();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var testConsumer = Sys.ActorOf(TestConsumer.PropsFor(consumerDelay, 42, consumerEndProbe.Ref, consumerController), $"destination-{_idCount}");
+        
+        var producerController = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, Option<Props>.None), $"producerController-{_idCount}");
+        var producer = Sys.ActorOf(Props.Create(() => new TestProducer(producerDelay, producerController)), $"producer-{_idCount}");
+        
+        consumerController.Tell(new ConsumerController.RegisterToProducerController<Job>(producerController));
+
+        await consumerEndProbe.ExpectMsgAsync<Collected>(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ReliableDelivery_must_work_with_slow_producer_and_fast_consumer()
+    {
+        await TestWithDelays(producerDelay: TimeSpan.FromMilliseconds(30), consumerDelay: TimeSpan.Zero);
+    }
+    
+    [Fact]
+    public async Task ReliableDelivery_must_work_with_fast_producer_and_slow_consumer()
+    {
+        await TestWithDelays(producerDelay: TimeSpan.Zero, consumerDelay: TimeSpan.FromMilliseconds(30));
+    }
+    
+    [Fact]
+    public async Task ReliableDelivery_must_work_with_fast_producer_and_fast_consumer()
+    {
+        await TestWithDelays(producerDelay: TimeSpan.Zero, consumerDelay: TimeSpan.Zero);
+    }
 }
