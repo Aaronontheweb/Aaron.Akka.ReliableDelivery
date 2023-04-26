@@ -9,6 +9,7 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
+using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Event;
@@ -21,9 +22,11 @@ namespace Aaron.Akka.ReliableDelivery.Tests;
 /// </summary>
 public sealed class TestConsumer : ReceiveActor, IWithTimers
 {
+    public static readonly TimeSpan DefaultConsumerDelay = TimeSpan.FromMilliseconds(10);
+
     public TimeSpan Delay { get; }
 
-    public Predicate<SomeAsyncJob> EndCondition { get; }
+    public Func<SomeAsyncJob, bool> EndCondition { get; }
 
     public IActorRef EndReplyTo { get; }
 
@@ -33,7 +36,7 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
     private ImmutableHashSet<(string, long)> _processed = ImmutableHashSet<(string, long)>.Empty;
     private int _messageCount = 0;
 
-    private TestConsumer(TimeSpan delay, Predicate<SomeAsyncJob> endCondition, IActorRef endReplyTo,
+    public TestConsumer(TimeSpan delay, Func<SomeAsyncJob, bool> endCondition, IActorRef endReplyTo,
         IActorRef consumerController)
     {
         Delay = delay;
@@ -46,19 +49,14 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
 
     private void Active()
     {
-        Receive<JobDelivery>(delivery =>
+        // normally this is handled by the Akka.Typed adapter, but since we're using the untyped we need to handle it here
+        Receive<ConsumerController.Delivery<Job>>(job =>
         {
-            _log.Debug("SeqNr {0} was delivered to consumer.", delivery.SeqNr);
-            if (Delay == TimeSpan.Zero)
-                Self.Tell(new SomeAsyncJob(delivery.Msg, delivery.ConfirmTo, delivery.ProducerId, delivery.SeqNr));
-            else
-            {
-                // schedule to simulate slower consumer
-                Timers.StartSingleTimer("job",
-                    new SomeAsyncJob(delivery.Msg, delivery.ConfirmTo, delivery.ProducerId, delivery.SeqNr),
-                    TimeSpan.FromMilliseconds(10));
-            }
+            var delivery = new JobDelivery(job.Message, job.ConfirmTo, job.ProducerId, job.SeqNr);
+            ReceiveJobDelivery(delivery);
         });
+        
+        Receive<JobDelivery>(ReceiveJobDelivery);
 
         Receive<SomeAsyncJob>(job =>
         {
@@ -87,6 +85,25 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
                 _messageCount++;
             }
         });
+    }
+
+    private void ReceiveJobDelivery(JobDelivery delivery)
+    {
+        _log.Debug("SeqNr {0} was delivered to consumer.", delivery.SeqNr);
+        if (Delay == TimeSpan.Zero)
+            Self.Tell(new SomeAsyncJob(delivery.Msg, delivery.ConfirmTo, delivery.ProducerId, delivery.SeqNr));
+        else
+        {
+            // schedule to simulate slower consumer
+            Timers.StartSingleTimer("job",
+                new SomeAsyncJob(delivery.Msg, delivery.ConfirmTo, delivery.ProducerId, delivery.SeqNr),
+                TimeSpan.FromMilliseconds(10));
+        }
+    }
+
+    protected override void PreStart()
+    {
+        ConsumerController.Tell(new ConsumerController.Start<Job>(Self));
     }
 
     public sealed class Job : IEquatable<Job>
@@ -171,12 +188,12 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
             seqNr == 1, ack, producerController);
     }
 
-    private static Predicate<SomeAsyncJob> ConsumerEndCondition(long seqNr) => msg => msg.SeqNr >= seqNr;
+    private static Func<SomeAsyncJob, bool> ConsumerEndCondition(long seqNr) => msg => msg.SeqNr >= seqNr;
 
     public static Props PropsFor(TimeSpan delay, long seqNr, IActorRef endReplyTo, IActorRef consumerController) =>
         Props.Create(() => new TestConsumer(delay, ConsumerEndCondition(seqNr), endReplyTo, consumerController));
 
-    public static Props PropsFor(TimeSpan delay, Predicate<SomeAsyncJob> endCondition, IActorRef endReplyTo,
+    public static Props PropsFor(TimeSpan delay, Func<SomeAsyncJob, bool> endCondition, IActorRef endReplyTo,
         IActorRef consumerController) =>
         Props.Create(() => new TestConsumer(delay, endCondition, endReplyTo, consumerController));
 

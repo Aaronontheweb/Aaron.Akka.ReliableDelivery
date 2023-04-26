@@ -18,6 +18,8 @@ namespace Aaron.Akka.ReliableDelivery.Tests;
 /// </summary>
 public class TestProducer : ReceiveActor, IWithTimers
 {
+    public static readonly TimeSpan DefaultProducerDelay = TimeSpan.FromMilliseconds(20);
+    
     public sealed class Tick
     {
         public static readonly Tick Instance = new();
