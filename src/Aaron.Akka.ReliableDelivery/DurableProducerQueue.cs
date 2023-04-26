@@ -81,16 +81,16 @@ public static class DurableProducerQueue
     /// </remarks>
     public sealed class StoreMessageConfirmed<T> : IDurableProducerQueueCommand<T>
     {
-        public StoreMessageConfirmed(long seqNo, string qualifier, long timestamp)
+        public StoreMessageConfirmed(long seqNr, string confirmationQualifier, long timestamp)
         {
-            Qualifier = qualifier;
-            SeqNo = seqNo;
+            ConfirmationQualifier = confirmationQualifier;
+            SeqNr = seqNr;
             Timestamp = timestamp;
         }
 
-        public string Qualifier { get; }
+        public string ConfirmationQualifier { get; }
 
-        public long SeqNo { get; }
+        public long SeqNr { get; }
 
         public long Timestamp { get; }
     }
@@ -128,7 +128,7 @@ public static class DurableProducerQueue
 
         public State<T> AddConfirmed(long seqNr, string qualifier, long timestamp)
         {
-            var newUnconfirmed = Unconfirmed.Where(c => !(c.SeqNr <= seqNr && c.Qualifier == qualifier))
+            var newUnconfirmed = Unconfirmed.Where(c => !(c.SeqNr <= seqNr && c.ConfirmationQualifier == qualifier))
                 .ToImmutableList();
 
             return new State<T>(CurrentSeqNr, Math.Max(HighestConfirmedSeqNr, seqNr),
@@ -192,12 +192,12 @@ public static class DurableProducerQueue
     /// </summary>
     public sealed class MessageSent<T> : IDurableProducerQueueEvent, IEquatable<MessageSent<T>>
     {
-        public MessageSent(long seqNr, MessageOrChunk<T> message, bool ack, string qualifier, long timestamp)
+        public MessageSent(long seqNr, MessageOrChunk<T> message, bool ack, string confirmationQualifier, long timestamp)
         {
             SeqNr = seqNr;
             Message = message;
             Ack = ack;
-            Qualifier = qualifier;
+            ConfirmationQualifier = confirmationQualifier;
             Timestamp = timestamp;
         }
 
@@ -207,7 +207,7 @@ public static class DurableProducerQueue
 
         public bool Ack { get; }
 
-        public string Qualifier { get; }
+        public string ConfirmationQualifier { get; }
 
         public long Timestamp { get; }
 
@@ -220,7 +220,7 @@ public static class DurableProducerQueue
             if (ReferenceEquals(null, other)) return false;
             if (ReferenceEquals(this, other)) return true;
             return SeqNr == other.SeqNr && Message.Equals(other.Message) && Ack == other.Ack &&
-                   Qualifier == other.Qualifier && Timestamp == other.Timestamp;
+                   ConfirmationQualifier == other.ConfirmationQualifier && Timestamp == other.Timestamp;
         }
 
         public MessageSent<T> WithQualifier(string qualifier)
@@ -230,7 +230,7 @@ public static class DurableProducerQueue
 
         public MessageSent<T> WithTimestamp(long timestamp)
         {
-            return new MessageSent<T>(SeqNr, Message, Ack, Qualifier, timestamp);
+            return new MessageSent<T>(SeqNr, Message, Ack, ConfirmationQualifier, timestamp);
         }
 
         public override bool Equals(object? obj)
@@ -245,7 +245,7 @@ public static class DurableProducerQueue
 
         public override string ToString()
         {
-            return $"MessageSent({SeqNr}, {Message}, {Ack}, {Qualifier}, {Timestamp})";
+            return $"MessageSent({SeqNr}, {Message}, {Ack}, {ConfirmationQualifier}, {Timestamp})";
         }
 
         public static MessageSent<T> FromChunked(long seqNo, ChunkedMessage chunkedMessage, bool ack,
@@ -266,7 +266,7 @@ public static class DurableProducerQueue
             seqNo = SeqNr;
             message = Message;
             ack = Ack;
-            qualifier = Qualifier;
+            qualifier = ConfirmationQualifier;
             timestamp = Timestamp;
         }
     }
