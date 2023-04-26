@@ -7,6 +7,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Aaron.Akka.ReliableDelivery.Internal;
@@ -126,6 +127,85 @@ public class DurableProducerControllerSpecs : TestKit
                 ImmutableDictionary<string, (long, long)>.Empty
                     .Add(NoQualifier, (3L, TestTimestamp)), 
                 ImmutableList<MessageSent<Job>>.Empty.Add(new MessageSent<Job>(4, new Job("msg-4"), true, NoQualifier, TestTimestamp))));
+            return Task.CompletedTask;
+        });
+    }
+
+    [Fact]
+    public async Task ProducerController_with_durable_queue_must_reply_to_MessageWithConfirmation_after_storage()
+    {
+        NextId();
+        var consumerControllerProbe = CreateTestProbe();
+
+        var durable = CreateProps(TimeSpan.Zero,
+            State<Job>.Empty, _ => false);
+
+        var producerController = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, durable),
+            $"producerController-{_idCount}");
+        var producerProbe = CreateTestProbe();
+        producerController.Tell(new ProducerController.Start<Job>(producerProbe.Ref));
+        
+        producerController.Tell(new ProducerController.RegisterConsumer<Job>(consumerControllerProbe));
+
+        var replyTo = CreateTestProbe();
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).AskNextTo(
+            new ProducerController.MessageWithConfirmation<Job>(new Job("msg-1"), replyTo.Ref));
+        await replyTo.ExpectMsgAsync(1L);
+        
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 1, producerController, ack:true));
+        producerController.Tell(new ProducerController.Request(1L, 10L, true, false));
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).AskNextTo(
+            new ProducerController.MessageWithConfirmation<Job>(new Job("msg-2"), replyTo.Ref));
+        replyTo.ExpectMsg(2L);
+    }
+
+    [Fact]
+    public async Task ProducerController_with_durable_queue_must_store_chunked_messages()
+    {
+        NextId();
+        var consumerControllerProbe = CreateTestProbe();
+
+        var stateHolder = new AtomicReference<DurableProducerQueueStateHolder<Job>>(State<Job>.Empty);
+        var durable = CreateProps(TimeSpan.Zero,
+            stateHolder, _ => false);
+        var producerController = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, durable, ProducerController.Settings.Create(Sys).WithChunkLargeMessagesBytes(1)),
+            $"producerController-{_idCount}");
+        var producerProbe = CreateTestProbe();
+        
+        producerController.Tell(new ProducerController.Start<Job>(producerProbe.Ref));
+        
+        producerController.Tell(new ProducerController.RegisterConsumer<Job>(consumerControllerProbe));
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo.Tell(new Job("abc"));
+        await consumerControllerProbe.ExpectMsgAsync<ConsumerController.SequencedMessage<Job>>();
+
+        await AwaitAssertAsync(() =>
+        {
+            var durableState = stateHolder.Value.State;
+            durableState.CurrentSeqNr.Should().Be(2);
+            durableState.Unconfirmed.Count.Should().Be(1);
+            durableState.Unconfirmed.First().Message.IsMessage.Should().BeFalse();
+            return Task.CompletedTask;
+        });
+        
+        producerController.Tell(new ProducerController.Request(0L, 10L, true, false));
+        
+        await consumerControllerProbe.ExpectMsgAsync<ConsumerController.SequencedMessage<Job>>();
+        
+        var seqMsg3 =  await consumerControllerProbe.ExpectMsgAsync<ConsumerController.SequencedMessage<Job>>();
+        seqMsg3.Message.IsMessage.Should().BeFalse();
+        seqMsg3.IsFirstChunk.Should().BeFalse();
+        seqMsg3.IsLastChunk.Should().BeTrue();
+        seqMsg3.SeqNr.Should().Be(3);
+        
+        await AwaitAssertAsync(() =>
+        {
+            var durableState = stateHolder.Value.State;
+            durableState.CurrentSeqNr.Should().Be(4);
+            durableState.Unconfirmed.Count.Should().Be(3);
+            durableState.Unconfirmed.First().Message.IsMessage.Should().BeFalse();
             return Task.CompletedTask;
         });
     }
