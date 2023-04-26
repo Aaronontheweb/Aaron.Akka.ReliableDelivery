@@ -138,4 +138,47 @@ public class ReliableDeliverySpecs : TestKit
         
         await consumerEndProbe2.ExpectMsgAsync<Collected>(TimeSpan.FromSeconds(5));
     }
+
+    [Fact]
+    public async Task ReliableDelivery_must_allow_replacement_of_producer()
+    {
+        NextId();
+        var consumerProbe = CreateTestProbe();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        consumerController.Tell(new ConsumerController.Start<Job>(consumerProbe.Ref));
+
+        var producerController1 = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, Option<Props>.None), $"producerController-{_idCount}");
+        var producerProbe1 = CreateTestProbe();
+        
+        producerController1.Tell(new ProducerController.Start<Job>(producerProbe1.Ref));
+        
+        consumerController.Tell(new ConsumerController.RegisterToProducerController<Job>(producerController1));
+
+        (await producerProbe1.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo.Tell(new Job("msg-1"));
+        var delivery1 = await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery1.Message.Should().Be(new Job("msg-1"));
+        delivery1.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        (await producerProbe1.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo.Tell(new Job("msg-2"));
+        var delivery2 = await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery2.Message.Should().Be(new Job("msg-2"));
+        delivery2.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        // replace producer
+        Sys.Stop(producerController1);
+        var producerController2 = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, Option<Props>.None), $"producerController2-{_idCount}");
+        var producerProbe2 = CreateTestProbe();
+        producerController2.Tell(new ProducerController.Start<Job>(producerProbe2.Ref));
+        producerController2.Tell(new ProducerController.RegisterConsumer<Job>(consumerController));
+        
+        (await producerProbe2.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo.Tell(new Job("msg-3"));
+        var delivery3 = await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery3.Message.Should().Be(new Job("msg-3"));
+        delivery3.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        (await producerProbe2.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo.Tell(new Job("msg-4"));
+        var delivery4 = await consumerProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery4.Message.Should().Be(new Job("msg-4"));
+        delivery4.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+    }
 }
