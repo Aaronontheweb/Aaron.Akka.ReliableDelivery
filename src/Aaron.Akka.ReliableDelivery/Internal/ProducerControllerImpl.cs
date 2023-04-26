@@ -922,7 +922,10 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         ResendUnconfirmed(CurrentState.Unconfirmed.Where(c => c.SeqNr >= fromSeqNr).ToImmutableList());
         if (fromSeqNr == 0 && !CurrentState.Unconfirmed.IsEmpty)
         {
-            // Scala code just copies the original Unconfirmed value back into the CurrentState here.
+            // need to mark the first unconfirmed message as "first" again, so the delivery-state inside the ConsumerController is correct
+            var newUnconfirmed = ImmutableList.Create(CurrentState.Unconfirmed.First().AsFirst())
+                .AddRange(CurrentState.Unconfirmed.Skip(1));
+            CurrentState = CurrentState.WithUnconfirmed(newUnconfirmed);
         }
     }
 

@@ -59,6 +59,6 @@ public class DurableProducerControllerSpecs : TestKit
         // no request to producer since it has unconfirmed to begin with
         await producerProbe.ExpectNoMsgAsync(100);
 
-        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 3, producerController));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 3, producerController).AsFirst());
     }
 }

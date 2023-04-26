@@ -211,16 +211,15 @@ public static class DurableProducerQueue
 
         public long Timestamp { get; }
 
-        internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true };
+        internal bool IsFirstChunk => Message.Chunk is { FirstChunk: true } or null;
 
-        internal bool IsLastChunk => Message.Chunk is { LastChunk: true };
+        internal bool IsLastChunk => Message.Chunk is { LastChunk: true } or null;
 
         public bool Equals(MessageSent<T>? other)
         {
             if (ReferenceEquals(null, other)) return false;
             if (ReferenceEquals(this, other)) return true;
-            return SeqNr == other.SeqNr && Message.Equals(other.Message) && Ack == other.Ack &&
-                   ConfirmationQualifier == other.ConfirmationQualifier && Timestamp == other.Timestamp;
+            return SeqNr == other.SeqNr && Message.Equals(other.Message) && Ack == other.Ack && ConfirmationQualifier == other.ConfirmationQualifier && Timestamp == other.Timestamp;
         }
 
         public MessageSent<T> WithQualifier(string qualifier)
@@ -235,12 +234,20 @@ public static class DurableProducerQueue
 
         public override bool Equals(object? obj)
         {
-            return ReferenceEquals(this, obj) || (obj is MessageSent<T> other && Equals(other));
+            return ReferenceEquals(this, obj) || obj is MessageSent<T> other && Equals(other);
         }
 
         public override int GetHashCode()
         {
-            return SeqNr.GetHashCode();
+            unchecked
+            {
+                var hashCode = SeqNr.GetHashCode();
+                hashCode = (hashCode * 397) ^ Message.GetHashCode();
+                hashCode = (hashCode * 397) ^ Ack.GetHashCode();
+                hashCode = (hashCode * 397) ^ ConfirmationQualifier.GetHashCode();
+                hashCode = (hashCode * 397) ^ Timestamp.GetHashCode();
+                return hashCode;
+            }
         }
 
         public override string ToString()
