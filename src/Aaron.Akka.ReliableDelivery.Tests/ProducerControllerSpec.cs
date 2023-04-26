@@ -10,7 +10,6 @@ using System.Threading.Tasks;
 using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Configuration;
-using Akka.Streams.Actors;
 using Akka.TestKit.Xunit2;
 using Akka.Util;
 using FluentAssertions;

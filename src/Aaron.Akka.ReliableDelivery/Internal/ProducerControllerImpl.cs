@@ -570,7 +570,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
                 newRequested = CurrentState.Requested;
             }
 
-            CurrentState = CurrentState.WithRequested(newRequested)
+            CurrentState = stateAfterAck.WithRequested(newRequested)
                 .WithSupportResend(supportResend)
                 .WithRequestedSeqNr(newRequestedSeqNr2)
                 .WithUnconfirmed(newUnconfirmed);
