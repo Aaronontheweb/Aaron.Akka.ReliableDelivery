@@ -118,4 +118,14 @@ public class ReliableDeliveryRandomSpecs : TestKit
         await Test(numberOfMessages: 63, producerDropProbability: producerDropProbability,
             consumerDropProbability: consumerDropProbability, Option<double>.None, true);
     }
+    
+    [Fact]
+    public async Task ReliableDelivery_with_random_failures_must_work_with_flaky_DurableProducerQueue()
+    {
+        NextId();
+        var durableFailProbability = 0.1 + ThreadLocalRandom.Current.NextDouble() * 0.1;
+
+        await Test(numberOfMessages: 31, producerDropProbability: 0.0,
+            consumerDropProbability:0.0, durableFailProbability, true);
+    }
 }
