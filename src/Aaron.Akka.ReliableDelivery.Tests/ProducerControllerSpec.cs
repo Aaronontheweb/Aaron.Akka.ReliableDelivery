@@ -320,6 +320,7 @@ public class ProducerControllerSpec : TestKit
     {
         NextId();
         var consumerControllerProbe = CreateTestProbe();
+
         var producerController = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, Option<Props>.None),
             $"producerController-{_idCount}");
         var producerProbe = CreateTestProbe();
@@ -350,5 +351,52 @@ public class ProducerControllerSpec : TestKit
         
         (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>()).SendNextTo.Tell(new Job("msg-5"));
         await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 5, producerController));
+    }
+
+    [Fact]
+    public async Task
+        ProducerController_without_resends_must_reply_to_MessageWithConfirmation_for_lost_messages()
+    {
+        NextId();
+        var consumerControllerProbe = CreateTestProbe();
+
+        var producerController = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, Option<Props>.None),
+            $"producerController-{_idCount}");
+        var producerProbe = CreateTestProbe();
+        producerController.Tell(new ProducerController.Start<Job>(producerProbe.Ref));
+
+        producerController.Tell(new ProducerController.RegisterConsumer<Job>(consumerControllerProbe.Ref));
+        
+        var replyTo = CreateTestProbe();
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>())
+            .AskNextTo(new ProducerController.MessageWithConfirmation<Job>(new Job("msg-1"), replyTo.Ref));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 1, producerController, ack:true));
+        producerController.Tell(new ProducerController.Request(1L, 10L, false, false));
+        await replyTo.ExpectMsgAsync(1L);
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>())
+            .AskNextTo(new ProducerController.MessageWithConfirmation<Job>(new Job("msg-2"), replyTo.Ref));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 2, producerController, ack:true));
+        producerController.Tell(new ProducerController.Ack(2L));
+        await replyTo.ExpectMsgAsync(2L);
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>())
+            .AskNextTo(new ProducerController.MessageWithConfirmation<Job>(new Job("msg-3"), replyTo.Ref));
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>())
+            .AskNextTo(new ProducerController.MessageWithConfirmation<Job>(new Job("msg-4"), replyTo.Ref));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 3, producerController, ack:true));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 4, producerController, ack:true));
+        // Ack(3 lost, but Ack(4) triggers reply for 3 and 4
+        producerController.Tell(new ProducerController.Ack(4L));
+        await replyTo.ExpectMsgAsync(3L);
+        await replyTo.ExpectMsgAsync(4L);
+        
+        (await producerProbe.ExpectMsgAsync<ProducerController.RequestNext<Job>>())
+            .AskNextTo(new ProducerController.MessageWithConfirmation<Job>(new Job("msg-5"), replyTo.Ref));
+        await consumerControllerProbe.ExpectMsgAsync(SequencedMessage(ProducerId, 5, producerController, ack:true));
+        // Ack(5) lost, but eventually a Request will trigger the reply
+        producerController.Tell(new ProducerController.Request(5L, 15L, false, false));
+        await replyTo.ExpectMsgAsync(5L);
     }
 }
