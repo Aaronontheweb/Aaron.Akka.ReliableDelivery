@@ -112,4 +112,30 @@ public class ReliableDeliverySpecs : TestKit
     {
         await TestWithDelays(producerDelay: TimeSpan.Zero, consumerDelay: TimeSpan.Zero);
     }
+
+    [Fact]
+    public async Task ReliableDelivery_must_allow_replacement_of_destination()
+    {
+        NextId();
+        var consumerEndProbe = CreateTestProbe();
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController-{_idCount}");
+        var testConsumer = Sys.ActorOf(TestConsumer.PropsFor(DefaultConsumerDelay, 42, consumerEndProbe.Ref, consumerController), $"destination-{_idCount}");
+        
+        var producerController = Sys.ActorOf(ProducerController.Create<Job>(Sys, ProducerId, Option<Props>.None), $"producerController-{_idCount}");
+        var producer = Sys.ActorOf(Props.Create(() => new TestProducer(DefaultProducerDelay, producerController)), $"producer-{_idCount}");
+
+        Watch(consumerController);
+        consumerController.Tell(new ConsumerController.RegisterToProducerController<Job>(producerController));
+
+        await consumerEndProbe.ExpectMsgAsync<Collected>(TimeSpan.FromSeconds(5));
+        await ExpectTerminatedAsync(consumerController);
+        
+        var consumerEndProbe2 = CreateTestProbe();
+        var consumerController2 = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None), $"consumerController2-{_idCount}");
+        var testConsumer2 = Sys.ActorOf(TestConsumer.PropsFor(DefaultConsumerDelay, 42, consumerEndProbe2.Ref, consumerController2), $"destination2-{_idCount}");
+        
+        consumerController2.Tell(new ConsumerController.RegisterToProducerController<Job>(producerController));
+        
+        await consumerEndProbe2.ExpectMsgAsync<Collected>(TimeSpan.FromSeconds(5));
+    }
 }
