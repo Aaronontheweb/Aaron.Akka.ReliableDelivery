@@ -121,6 +121,34 @@ public static class ProducerController
         /// Timeframe for re-delivery of the first message
         /// </summary>
         public TimeSpan DurableQueueResendFirstInterval { get; }
+        
+        // method for immutably copying the Settings with a new value for ChunkLargeMessagesBytes
+        public Settings WithChunkLargeMessagesBytes(int? chunkLargeMessagesBytes)
+        {
+            return new Settings(DurableQueueRequestTimeout, DurableQueueRetryAttempts, DurableQueueResendFirstInterval,
+                chunkLargeMessagesBytes);
+        }
+        
+        // method for immutably copying the Settings with a new value for DurableQueueRequestTimeout
+        public Settings WithDurableQueueRequestTimeout(TimeSpan durableQueueRequestTimeout)
+        {
+            return new Settings(durableQueueRequestTimeout, DurableQueueRetryAttempts, DurableQueueResendFirstInterval,
+                ChunkLargeMessagesBytes);
+        }
+        
+        // method for immutably copying the Settings with a new value for DurableQueueRetryAttempts
+        public Settings WithDurableQueueRetryAttempts(int durableQueueRetryAttempts)
+        {
+            return new Settings(DurableQueueRequestTimeout, durableQueueRetryAttempts, DurableQueueResendFirstInterval,
+                ChunkLargeMessagesBytes);
+        }
+        
+        // method for immutably copying the Settings with a new value for DurableQueueResendFirstInterval
+        public Settings WithDurableQueueResendFirstInterval(TimeSpan durableQueueResendFirstInterval)
+        {
+            return new Settings(DurableQueueRequestTimeout, DurableQueueRetryAttempts, durableQueueResendFirstInterval,
+                ChunkLargeMessagesBytes);
+        }
     }
 
 
