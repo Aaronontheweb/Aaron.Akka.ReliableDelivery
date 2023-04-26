@@ -98,7 +98,7 @@ public static class DurableProducerQueue
     /// <summary>
     ///     Durable producer queue state
     /// </summary>
-    public readonly struct State<T> : IDeliverySerializable
+    public readonly struct State<T> : IDeliverySerializable, IEquatable<State<T>>
     {
         public static State<T> Empty { get; } = new(1, 0, ImmutableDictionary<string, (long, long)>.Empty,
             ImmutableList<MessageSent<T>>.Empty);
@@ -178,6 +178,29 @@ public static class DurableProducerQueue
 
             return new State<T>(newCurrentSeqNr, HighestConfirmedSeqNr, ConfirmedSeqNr, newUnconfirmed.ToImmutable());
         }
+
+        public bool Equals(State<T> other)
+        {
+            return CurrentSeqNr == other.CurrentSeqNr && HighestConfirmedSeqNr == other.HighestConfirmedSeqNr &&
+                   ConfirmedSeqNr.SequenceEqual(other.ConfirmedSeqNr) && Unconfirmed.SequenceEqual(other.Unconfirmed);
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is State<T> other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hashCode = CurrentSeqNr.GetHashCode();
+                hashCode = (hashCode * 397) ^ HighestConfirmedSeqNr.GetHashCode();
+                hashCode = (hashCode * 397) ^ ConfirmedSeqNr.GetHashCode();
+                hashCode = (hashCode * 397) ^ Unconfirmed.GetHashCode();
+                return hashCode;
+            }
+        }
     }
 
     /// <summary>
@@ -192,7 +215,8 @@ public static class DurableProducerQueue
     /// </summary>
     public sealed class MessageSent<T> : IDurableProducerQueueEvent, IEquatable<MessageSent<T>>
     {
-        public MessageSent(long seqNr, MessageOrChunk<T> message, bool ack, string confirmationQualifier, long timestamp)
+        public MessageSent(long seqNr, MessageOrChunk<T> message, bool ack, string confirmationQualifier,
+            long timestamp)
         {
             SeqNr = seqNr;
             Message = message;
@@ -219,7 +243,8 @@ public static class DurableProducerQueue
         {
             if (ReferenceEquals(null, other)) return false;
             if (ReferenceEquals(this, other)) return true;
-            return SeqNr == other.SeqNr && Message.Equals(other.Message) && Ack == other.Ack && ConfirmationQualifier == other.ConfirmationQualifier && Timestamp == other.Timestamp;
+            return SeqNr == other.SeqNr && Message.Equals(other.Message) && Ack == other.Ack &&
+                   ConfirmationQualifier == other.ConfirmationQualifier && Timestamp == other.Timestamp;
         }
 
         public MessageSent<T> WithQualifier(string qualifier)

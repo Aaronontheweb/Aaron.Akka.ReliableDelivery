@@ -9,9 +9,25 @@ using System;
 using System.Linq;
 using Akka.Actor;
 using Akka.Event;
+using Akka.Util;
 using static Aaron.Akka.ReliableDelivery.DurableProducerQueue;
 
 namespace Aaron.Akka.ReliableDelivery.Tests;
+
+public class DurableProducerQueueStateHolder<T>
+{
+    public DurableProducerQueueStateHolder(State<T> state)
+    {
+        State = state;
+    }
+    
+    public State<T> State { get; }
+    
+    // add implicit conversion operators to simplify tests
+    public static implicit operator State<T>(DurableProducerQueueStateHolder<T> holder) => holder.State;
+    
+    public static implicit operator DurableProducerQueueStateHolder<T>(State<T> state) => new(state);
+}
 
 public static class TestDurableProducerQueue
 {
@@ -20,15 +36,15 @@ public static class TestDurableProducerQueue
     /// </summary>
     public const long TestTimestamp = long.MaxValue;
 
-    public static Props CreateProps<T>(TimeSpan delay, State<T> initialState,
+    public static Props CreateProps<T>(TimeSpan delay, AtomicReference<DurableProducerQueueStateHolder<T>> initialState,
         Predicate<IDurableProducerQueueCommand<T>> failWhen)
     {
         return Props.Create(() => new TestDurableProducerQueue<T>(delay, failWhen, initialState));
     }
 
-    public static Props CreateProps<T>(TimeSpan delay, State<T> initialState)
+    public static Props CreateProps<T>(TimeSpan delay, State<T> initialState, Predicate<IDurableProducerQueueCommand<T>> failWhen)
     {
-        return Props.Create(() => new TestDurableProducerQueue<T>(delay, _ => false, initialState));
+        return Props.Create(() => new TestDurableProducerQueue<T>(delay, _ => false, new AtomicReference<DurableProducerQueueStateHolder<T>>(initialState)));
     }
 }
 
@@ -42,14 +58,20 @@ public class TestDurableProducerQueue<T> : ReceiveActor
     private readonly TimeSpan _delay;
     private readonly Predicate<IDurableProducerQueueCommand<T>> _failWhen;
 
-    public State<T> CurrentState { get; private set; }
+    private AtomicReference<DurableProducerQueueStateHolder<T>> _internalState;
+
+    public State<T> CurrentState
+    {
+        get => _internalState.Value.State;
+        private set => _internalState.Value = value;
+    }
 
     public TestDurableProducerQueue(TimeSpan delay, Predicate<IDurableProducerQueueCommand<T>> failWhen,
-        State<T> initialState)
+        AtomicReference<DurableProducerQueueStateHolder<T>> initialState)
     {
         _delay = delay;
         _failWhen = failWhen;
-        CurrentState = initialState;
+        _internalState = initialState;
         Active();
     }
 
@@ -119,6 +141,6 @@ public class TestDurableProducerQueue<T> : ReceiveActor
         CurrentState = CurrentState.CleanUpPartialChunkedMessages();
         _log.Info("Starting with seqNr [{0}], confirmedSeqNr [{1}]", CurrentState.CurrentSeqNr,
             string.Join(",",
-                CurrentState.ConfirmedSeqNr.Select(c => $"[{c.Key}] -> (low {c.Value.Item1}, high {c.Value.Item2})")));
+                CurrentState.ConfirmedSeqNr.Select(c => $"[{c.Key}] -> (seqNr {c.Value.Item1}, timestamp {c.Value.Item2})")));
     }
 }
