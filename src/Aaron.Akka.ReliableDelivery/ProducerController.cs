@@ -243,7 +243,7 @@ public static class ProducerController
                 return new MessageWithConfirmation<T>(msg, r);
             }
 
-            return SendNextTo.Ask<long>(Wrapper, cancellationToken:cancellationToken);
+            return SendNextTo.Ask<long>(Wrapper, cancellationToken:cancellationToken, timeout:null);
         }
 
         /// <summary>

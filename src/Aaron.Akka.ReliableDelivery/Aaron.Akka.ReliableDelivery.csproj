@@ -7,12 +7,12 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Akka.Streams" />
+      <None Remove="delivery.conf" />
+      <EmbeddedResource Include="delivery.conf" />
     </ItemGroup>
 
     <ItemGroup>
-      <None Remove="delivery.conf" />
-      <EmbeddedResource Include="delivery.conf" />
+      <PackageReference Include="Akka" />
     </ItemGroup>
 
 
