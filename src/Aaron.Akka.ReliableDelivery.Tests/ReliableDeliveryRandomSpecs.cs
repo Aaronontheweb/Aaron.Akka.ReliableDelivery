@@ -88,7 +88,7 @@ public class ReliableDeliveryRandomSpecs : TestKit
             };
         }
 
-        var stateHolder = new AtomicReference<DurableProducerQueueStateHolder<TestConsumer.Job>>();
+        var stateHolder = new AtomicReference<DurableProducerQueueStateHolder<TestConsumer.Job>>(DurableProducerQueueStateHolder<TestConsumer.Job>.Empty);
         var durableQueue = durableFailProbability.Select(p =>
         {
             return TestDurableProducerQueue.CreateProps(durableDelay, stateHolder,
