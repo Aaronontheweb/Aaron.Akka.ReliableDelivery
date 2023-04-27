@@ -6,8 +6,6 @@
 // -----------------------------------------------------------------------
 
 using System.Collections.Immutable;
-using System.ComponentModel.Design;
-using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Event;
 using Akka.Util.Extensions;
@@ -19,9 +17,9 @@ namespace Aaron.Akka.ReliableDelivery.Cluster.Sharding.Internal;
 /// INTERNAL API
 /// </summary>
 /// <typeparam name="T">The types of messages handled by the ConsumerController</typeparam>
-internal class ShardingConsumerControllerImpl<T> : ReceiveActor, IWithStash
+internal class ShardingConsumerController<T> : ReceiveActor, IWithStash
 {
-    public ShardingConsumerControllerImpl(Props consumerProps, ShardingConsumerController.Settings settings)
+    public ShardingConsumerController(Props consumerProps, ShardingConsumerController.Settings settings)
     {
         ConsumerProps = consumerProps;
         Settings = settings;
