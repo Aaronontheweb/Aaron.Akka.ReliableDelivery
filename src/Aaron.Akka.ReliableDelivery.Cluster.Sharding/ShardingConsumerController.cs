@@ -37,7 +37,7 @@ public static class ShardingConsumerController
 {
     public class Settings
     {
-        public Settings(int bufferSize, ConsumerController.Settings consumerControllerSettings)
+        private Settings(int bufferSize, ConsumerController.Settings consumerControllerSettings)
         {
             BufferSize = bufferSize;
             ConsumerControllerSettings = consumerControllerSettings;
@@ -76,6 +76,6 @@ public static class ShardingConsumerController
     /// <returns>The props used to start this entity.</returns>
     public static Props Create<T>(Props consumerProps, Settings settings)
     {
-        return Props.Create(() => new ShardingConsumerController<T>(consumerProps, settings));
+        return Props.Create(() => new ShardingConsumerController<T>(consumerProps, settings)).WithStashCapacity(settings.BufferSize);
     }
 }
