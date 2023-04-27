@@ -290,5 +290,10 @@ public static class ConsumerController
         {
             return new Settings(FlowControlWindow, ResendIntervalMin, ResendIntervalMax, onlyFlowControl);
         }
+
+        public override string ToString()
+        {
+            return $"ConsumerController.Settings({FlowControlWindow}, {ResendIntervalMin}, {ResendIntervalMax}, {OnlyFlowControl})";
+        }
     }
 }

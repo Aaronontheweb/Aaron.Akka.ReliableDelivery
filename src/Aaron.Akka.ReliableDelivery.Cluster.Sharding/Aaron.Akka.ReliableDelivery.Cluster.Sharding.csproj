@@ -14,4 +14,9 @@
       <PackageReference Include="Akka.Cluster.Sharding" />
     </ItemGroup>
 
+    <ItemGroup>
+      <None Remove="delivery.conf" />
+      <Resource Include="delivery.conf" />
+    </ItemGroup>
+
 </Project>
