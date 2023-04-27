@@ -235,7 +235,7 @@ public static class ProducerController
         /// <param name="cancellationToken">Optional - a CancellationToken.
         ///
         /// Note: this token only cancels the receipt of the Ack (long) - it does not stop the message from being delivered.</param>
-        /// <returns>A task that will complete once the message has been successfully processed by the consumer.</returns>
+        /// <returns>A task that will complete once the message has been successfully persisted by the <see cref="ProducerController"/>.</returns>
         public Task<long> AskNextTo(T msg, CancellationToken cancellationToken = default)
         {
             MessageWithConfirmation<T> Wrapper(IActorRef r)
