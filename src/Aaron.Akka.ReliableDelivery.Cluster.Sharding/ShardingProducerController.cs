@@ -8,6 +8,9 @@
 using System.Collections.Immutable;
 using Akka.Actor;
 using Akka.Annotations;
+using Akka.Cluster.Sharding;
+using Akka.Configuration;
+
 namespace Aaron.Akka.ReliableDelivery.Cluster.Sharding;
 
 using EntityId = System.String;
@@ -34,9 +37,8 @@ public static class ShardingProducerController
     /// <typeparam name="T">The types of messages handled by the <see cref="ShardingProducerController"/>.</typeparam>
     public interface IShardingProducerControllerCommand<T>
     {
-        
     }
-    
+
     public sealed class Start<T> : IShardingProducerControllerCommand<T>
     {
         public Start(IActorRef producer)
@@ -46,7 +48,7 @@ public static class ShardingProducerController
 
         public IActorRef Producer { get; }
     }
-    
+
     public sealed class MessageWithConfirmation<T> : IShardingProducerControllerCommand<T>
     {
         public MessageWithConfirmation(string entityId, T message, IActorRef replyTo)
@@ -55,11 +57,11 @@ public static class ShardingProducerController
             ReplyTo = replyTo;
             EntityId = entityId;
         }
-        
+
         public EntityId EntityId { get; }
 
         public T Message { get; }
-        
+
         public IActorRef ReplyTo { get; }
     }
 
@@ -78,7 +80,8 @@ public static class ShardingProducerController
     /// <typeparam name="T">The type of message that can be handled by the consumer actors.</typeparam>
     public sealed class RequestNext<T>
     {
-        public RequestNext(IActorRef sendNextTo, ImmutableHashSet<string> entitiesWithDemand, ImmutableDictionary<string, int> bufferedForEntitiesWithoutDemand)
+        public RequestNext(IActorRef sendNextTo, ImmutableHashSet<string> entitiesWithDemand,
+            ImmutableDictionary<string, int> bufferedForEntitiesWithoutDemand)
         {
             SendNextTo = sendNextTo;
             EntitiesWithDemand = entitiesWithDemand;
@@ -86,9 +89,9 @@ public static class ShardingProducerController
         }
 
         public IActorRef SendNextTo { get; }
-        
+
         public ImmutableHashSet<EntityId> EntitiesWithDemand { get; }
-        
+
         public ImmutableDictionary<EntityId, int> BufferedForEntitiesWithoutDemand { get; }
 
         /// <summary>
@@ -107,7 +110,7 @@ public static class ShardingProducerController
                 return new MessageWithConfirmation<T>(entityId, msg, r);
             }
 
-            return SendNextTo.Ask<long>(Wrapper, cancellationToken:cancellationToken, timeout:null);
+            return SendNextTo.Ask<long>(Wrapper, cancellationToken: cancellationToken, timeout: null);
         }
 
         /// <summary>
@@ -130,7 +133,8 @@ public static class ShardingProducerController
 
     public sealed class Settings
     {
-        public Settings(int bufferSize, TimeSpan internalAskTimeout, TimeSpan cleanupUnusedAfter, TimeSpan resendFirstUnconfirmedIdleTimeout, ProducerController.Settings producerControllerSettings)
+        public Settings(int bufferSize, TimeSpan internalAskTimeout, TimeSpan cleanupUnusedAfter,
+            TimeSpan resendFirstUnconfirmedIdleTimeout, ProducerController.Settings producerControllerSettings)
         {
             BufferSize = bufferSize;
             InternalAskTimeout = internalAskTimeout;
@@ -140,38 +144,127 @@ public static class ShardingProducerController
         }
 
         public int BufferSize { get; }
-        
+
         public TimeSpan InternalAskTimeout { get; }
-        
+
         public TimeSpan CleanupUnusedAfter { get; }
-        
+
         public TimeSpan ResendFirstUnconfirmedIdleTimeout { get; }
-        
+
         public ProducerController.Settings ProducerControllerSettings { get; }
-        
+
         public Settings WithBufferSize(int bufferSize)
         {
-            return new Settings(bufferSize, InternalAskTimeout, CleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout, ProducerControllerSettings);
+            return new Settings(bufferSize, InternalAskTimeout, CleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout,
+                ProducerControllerSettings);
         }
-        
+
         public Settings WithInternalAskTimeout(TimeSpan internalAskTimeout)
         {
-            return new Settings(BufferSize, internalAskTimeout, CleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout, ProducerControllerSettings);
+            return new Settings(BufferSize, internalAskTimeout, CleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout,
+                ProducerControllerSettings);
         }
-        
+
         public Settings WithCleanupUnusedAfter(TimeSpan cleanupUnusedAfter)
         {
-            return new Settings(BufferSize, InternalAskTimeout, cleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout, ProducerControllerSettings);
+            return new Settings(BufferSize, InternalAskTimeout, cleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout,
+                ProducerControllerSettings);
         }
-        
+
         public Settings WithResendFirstUnconfirmedIdleTimeout(TimeSpan resendFirstUnconfirmedIdleTimeout)
         {
-            return new Settings(BufferSize, InternalAskTimeout, CleanupUnusedAfter, resendFirstUnconfirmedIdleTimeout, ProducerControllerSettings);
+            return new Settings(BufferSize, InternalAskTimeout, CleanupUnusedAfter, resendFirstUnconfirmedIdleTimeout,
+                ProducerControllerSettings);
         }
-        
+
         public Settings WithProducerControllerSettings(ProducerController.Settings producerControllerSettings)
         {
-            return new Settings(BufferSize, InternalAskTimeout, CleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout, producerControllerSettings);
+            return new Settings(BufferSize, InternalAskTimeout, CleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout,
+                producerControllerSettings);
+        }
+
+        /// <summary>
+        /// Factory method for creating from a <see cref="Config"/> corresponding to `akka.reliable-delivery.sharding.producer-controller`
+        /// of the <see cref="ActorSystem"/>.
+        /// </summary>
+        public static Settings Create(ActorSystem system)
+        {
+            return Create(system.Settings.Config.GetConfig("akka.reliable-delivery.sharding.producer-controller"));
+        }
+
+        /// <summary>
+        /// Factory method for creating from a <see cref="Config"/> corresponding to `akka.reliable-delivery.sharding.producer-controller`.
+        /// </summary>
+        public static Settings Create(Config config)
+        {
+            return new Settings(bufferSize: config.GetInt("buffer-size"),
+                internalAskTimeout: config.GetTimeSpan("internal-ask-timeout"),
+                cleanupUnusedAfter: config.GetTimeSpan("cleanup-unused-after"),
+                resendFirstUnconfirmedIdleTimeout: config.GetTimeSpan("resend-first-unconfirmed-idle-timeout"),
+                producerControllerSettings: ProducerController.Settings.Create(config));
+        }
+
+        internal sealed record Ack(string OutKey, long OutSeqNr);
+
+        internal sealed record AskTimeout(string OutKey, long OutSeqNr);
+
+        internal sealed class WrappedRequestNext<T>
+        {
+            public WrappedRequestNext(ProducerController.RequestNext<T> requestNext)
+            {
+                RequestNext = requestNext;
+            }
+
+            public ProducerController.RequestNext<T> RequestNext { get; }
+        }
+
+        internal sealed record Msg(ShardingEnvelope Envelope, long AlreadyStored)
+        {
+            public bool IsAlreadyStored => AlreadyStored > 0;
+        }
+
+        internal sealed record LoadStateReply<T>(DurableProducerQueue.State<T> State);
+
+        internal sealed record LoadStateFailed(int Attempt);
+
+        internal sealed record StoreMessageSentReply(DurableProducerQueue.StoreMessageSentAck Ack);
+
+        internal sealed record StoreMessageSentFailed<T>(DurableProducerQueue.StoreMessageSent<T> MessageSent,
+            int Attempt);
+
+        internal sealed record StoreMessageSentCompleted<T>(DurableProducerQueue.MessageSent<T> MessageSent);
+
+        internal sealed class DurableQueueTerminated
+        {
+            public static readonly DurableQueueTerminated Instance = new DurableQueueTerminated();
+
+            private DurableQueueTerminated()
+            {
+            }
+        }
+
+        internal sealed class ResendFirstUnconfirmed
+        {
+            public static readonly ResendFirstUnconfirmed Instance = new ResendFirstUnconfirmed();
+
+            private ResendFirstUnconfirmed()
+            {
+            }
+        }
+
+        internal sealed class CleanupUnused
+        {
+            public static readonly CleanupUnused Instance = new CleanupUnused();
+
+            private CleanupUnused()
+            {
+            }
+        }
+
+        internal record struct OutState<T>
+        {
+            public EntityId EntityId { get; }
+            public IActorRef Produc
         }
     }
 }
