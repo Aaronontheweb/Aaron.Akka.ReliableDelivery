@@ -16,6 +16,8 @@ namespace Aaron.Akka.ReliableDelivery.Tests;
 
 public class DurableProducerQueueStateHolder<T>
 {
+    public static DurableProducerQueueStateHolder<T> Empty => new(State<T>.Empty);
+
     public DurableProducerQueueStateHolder(State<T> state)
     {
         State = state;

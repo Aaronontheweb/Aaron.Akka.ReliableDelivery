@@ -6,8 +6,6 @@
 // -----------------------------------------------------------------------
 
 using System;
-using System.Collections.Generic;
-using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Event;
 
@@ -16,8 +14,10 @@ namespace Aaron.Akka.ReliableDelivery.Tests;
 /// <summary>
 /// INTERNAL API.
 /// </summary>
-public class TestProducer : ReceiveActor, IWithTimers
+public sealed class TestProducer : ReceiveActor, IWithTimers
 {
+    public static readonly TimeSpan DefaultProducerDelay = TimeSpan.FromMilliseconds(20);
+
     public sealed class Tick
     {
         public static readonly Tick Instance = new();
