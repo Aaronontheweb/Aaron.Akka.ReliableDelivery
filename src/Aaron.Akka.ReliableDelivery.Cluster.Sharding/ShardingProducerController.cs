@@ -10,6 +10,8 @@ using Akka.Actor;
 using Akka.Annotations;
 using Akka.Cluster.Sharding;
 using Akka.Configuration;
+using Akka.Pattern;
+using Akka.Util;
 
 namespace Aaron.Akka.ReliableDelivery.Cluster.Sharding;
 
@@ -261,10 +263,51 @@ public static class ShardingProducerController
             }
         }
 
+        internal record struct Buffered<T>(long TotalSeqNr, T Msg, Option<IActorRef> ReplyTo);
+
+        internal record struct Unconfirmed<T>(long TotalSeqNr, long OutSeqNr, Option<IActorRef> ReplyTo);
+
         internal record struct OutState<T>
         {
-            public EntityId EntityId { get; }
-            public IActorRef Produc
+            public OutState(EntityId EntityId, IActorRef ProducerController, Option<IActorRef> NextTo,
+                ImmutableList<Buffered<T>> Buffered, long SeqNr, ImmutableList<Unconfirmed<T>> Unconfirmed, long Timestamp)
+            {
+                this.EntityId = EntityId;
+                this.ProducerController = ProducerController;
+                this.NextTo = NextTo;
+                this.Buffered = Buffered;
+                this.SeqNr = SeqNr;
+                this.Unconfirmed = Unconfirmed;
+                this.Timestamp = Timestamp;
+
+                if (NextTo.HasValue && Buffered.Any())
+                    throw new IllegalStateException("NextTo and Buffered shouldn't both be nonEmpty");
+            }
+
+            public EntityId EntityId { get; set; }
+            public IActorRef ProducerController { get; set; }
+            public Option<IActorRef> NextTo { get; set; }
+            public ImmutableList<Buffered<T>> Buffered { get; set; }
+            public long SeqNr { get; set; }
+            public ImmutableList<Unconfirmed<T>> Unconfirmed { get; set; }
+            public long Timestamp { get; set; }
+
+            public void Deconstruct(out EntityId EntityId, out IActorRef ProducerController, out Option<IActorRef> NextTo, out ImmutableList<Buffered<T>> Buffered, out long SeqNr, out ImmutableList<Unconfirmed<T>> Unconfirmed, out long Timestamp)
+            {
+                EntityId = this.EntityId;
+                ProducerController = this.ProducerController;
+                NextTo = this.NextTo;
+                Buffered = this.Buffered;
+                SeqNr = this.SeqNr;
+                Unconfirmed = this.Unconfirmed;
+                Timestamp = this.Timestamp;
+            }
+        };
+
+        internal record struct State<T>(long CurrentSeqNr, IActorRef Producer,
+            ImmutableDictionary<string, OutState<T>> OutStates, ImmutableDictionary<long, IActorRef> ReplyAfterStore)
+        {
+            public long BufferSize => OutStates.Values.Aggregate(0L, (acc, outState) => acc + outState.Buffered.Count);
         }
     }
 }
