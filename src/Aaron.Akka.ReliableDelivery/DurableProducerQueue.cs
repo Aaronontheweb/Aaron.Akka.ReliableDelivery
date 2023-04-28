@@ -98,7 +98,7 @@ public static class DurableProducerQueue
     /// <summary>
     ///     Durable producer queue state
     /// </summary>
-    public readonly struct State<T> : IDeliverySerializable, IEquatable<State<T>>
+    public record struct State<T> : IDeliverySerializable, IEquatable<State<T>>
     {
         public static State<T> Empty { get; } = new(1, 0, ImmutableDictionary<string, (long, long)>.Empty,
             ImmutableList<MessageSent<T>>.Empty);
@@ -112,13 +112,13 @@ public static class DurableProducerQueue
             Unconfirmed = unconfirmed;
         }
 
-        public long CurrentSeqNr { get; }
+        public long CurrentSeqNr { get; init; }
 
-        public long HighestConfirmedSeqNr { get; }
+        public long HighestConfirmedSeqNr { get; init; }
 
-        public ImmutableDictionary<string, (long, long)> ConfirmedSeqNr { get; }
+        public ImmutableDictionary<string, (long, long)> ConfirmedSeqNr { get; init; }
 
-        public ImmutableList<MessageSent<T>> Unconfirmed { get; }
+        public ImmutableList<MessageSent<T>> Unconfirmed { get; init; }
 
         public State<T> AddMessageSent(MessageSent<T> messageSent)
         {
@@ -183,11 +183,6 @@ public static class DurableProducerQueue
         {
             return CurrentSeqNr == other.CurrentSeqNr && HighestConfirmedSeqNr == other.HighestConfirmedSeqNr &&
                    ConfirmedSeqNr.SequenceEqual(other.ConfirmedSeqNr) && Unconfirmed.SequenceEqual(other.Unconfirmed);
-        }
-
-        public override bool Equals(object? obj)
-        {
-            return obj is State<T> other && Equals(other);
         }
 
         public override int GetHashCode()

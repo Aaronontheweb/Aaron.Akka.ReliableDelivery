@@ -38,6 +38,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     /// Used only for testing to simulate network failures.
     /// </summary>
     private readonly Func<object, double>? _fuzzingControl;
+
     private readonly Func<SequencedMessage<T>, object> _sendAdapter;
     private readonly Lazy<Serialization> _serialization = new(() => Context.System.Serialization);
     private readonly CancellationTokenSource _shutdownCancellation = new();
@@ -45,7 +46,8 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     private readonly ITimeProvider _timeProvider;
 
     public ProducerController(string producerId,
-        Option<Props> durableProducerQueue, ProducerController.Settings? settings = null, ITimeProvider? timeProvider = null,
+        Option<Props> durableProducerQueue, ProducerController.Settings? settings = null,
+        ITimeProvider? timeProvider = null,
         Func<SequencedMessage<T>, object>? sendAdapter = null, Func<object, double>? fuzzingControl = null)
     {
         ProducerId = producerId;
@@ -66,7 +68,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     protected override bool AroundReceive(Receive receive, object message)
     {
         // TESTING PURPOSES ONLY - used to simulate network failures.
-        if(_fuzzingControl != null && ThreadLocalRandom.Current.NextDouble() < _fuzzingControl(message))
+        if (_fuzzingControl != null && ThreadLocalRandom.Current.NextDouble() < _fuzzingControl(message))
             return true;
         return base.AroundReceive(receive, message);
     }
@@ -88,7 +90,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     /// <summary>
     ///     The delivery state of the producer.
     /// </summary>
-    public readonly struct State
+    public record struct State
     {
         public State(bool requested, long currentSeqNr, long confirmedSeqNr, long requestedSeqNr, bool supportResend,
             long firstSeqNr,
@@ -114,149 +116,56 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         /// <summary>
         ///     Has the consumer sent us their first request yet?
         /// </summary>
-        public bool Requested { get; }
+        public bool Requested { get; init; }
 
         /// <summary>
         ///     Highest produced sequence number. Should always be less than or equal to <see cref="ConfirmedSeqNr" />.
         /// </summary>
-        public long CurrentSeqNr { get; }
+        public long CurrentSeqNr { get; init; }
 
         /// <summary>
         ///     Highest confirmed sequence number
         /// </summary>
-        public long ConfirmedSeqNr { get; }
+        public long ConfirmedSeqNr { get; init; }
 
         /// <summary>
         ///     The current sequence number being requested by the consumer.
         /// </summary>
-        public long RequestedSeqNr { get; }
+        public long RequestedSeqNr { get; init; }
 
-        public bool SupportResend { get; }
+        public bool SupportResend { get; init; }
 
-        public ImmutableDictionary<long, IActorRef> ReplyAfterStore { get; }
+        public ImmutableDictionary<long, IActorRef> ReplyAfterStore { get; init; }
 
         /// <summary>
         ///     The first sequence number in this state.
         /// </summary>
-        public long FirstSeqNr { get; }
+        public long FirstSeqNr { get; init; }
 
         /// <summary>
         ///     The unconfirmed messages that have been sent to the consumer.
         /// </summary>
-        public ImmutableList<SequencedMessage<T>> Unconfirmed { get; }
+        public ImmutableList<SequencedMessage<T>> Unconfirmed { get; init; }
 
         /// <summary>
         ///     When chunked delivery is enabled, this is where the not-yet-transmitted chunks are stored.
         /// </summary>
-        public ImmutableList<SequencedMessage<T>> RemainingChunks { get; }
+        public ImmutableList<SequencedMessage<T>> RemainingChunks { get; init; }
 
         /// <summary>
         /// The sequence number of a message that is currently being stored.
         /// </summary>
-        public long StoreMessageSentInProgress { get; }
+        public long StoreMessageSentInProgress { get; init; }
 
         /// <summary>
         ///     A reference to the producer actor.
         /// </summary>
-        public IActorRef? Producer { get; }
+        public IActorRef? Producer { get; init; }
 
         /// <summary>
         /// Monad for sending a message to the ConsumerController.
         /// </summary>
-        public Action<SequencedMessage<T>> Send { get; }
-
-        // copy state with new producer
-        public State WithProducer(IActorRef producer)
-        {
-            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, SupportResend,
-                FirstSeqNr, Unconfirmed, producer, RemainingChunks, ReplyAfterStore, Send, StoreMessageSentInProgress);
-        }
-
-        // copy state with new requested sequence number
-        public State WithRequestedSeqNr(long requestedSeqNr)
-        {
-            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr,
-                requestedSeqNr, SupportResend, FirstSeqNr, Unconfirmed, Producer, RemainingChunks, ReplyAfterStore,
-                Send, StoreMessageSentInProgress);
-        }
-
-        // copy state with new confirmed sequence number
-        public State WithConfirmedSeqNr(long confirmedSeqNr)
-        {
-            return new State(Requested, CurrentSeqNr, confirmedSeqNr,
-                RequestedSeqNr, SupportResend, FirstSeqNr, Unconfirmed, Producer, RemainingChunks, ReplyAfterStore,
-                Send, StoreMessageSentInProgress);
-        }
-
-        // copy state with new current sequence number
-        public State WithCurrentSeqNr(long currentSeqNr)
-        {
-            return new State(Requested, currentSeqNr, ConfirmedSeqNr, RequestedSeqNr, SupportResend,
-                FirstSeqNr, Unconfirmed, Producer, RemainingChunks, ReplyAfterStore, Send, StoreMessageSentInProgress);
-        }
-
-        // copy state with new unconfirmed messages
-        public State WithUnconfirmed(ImmutableList<SequencedMessage<T>> unconfirmed)
-        {
-            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, SupportResend, FirstSeqNr,
-                unconfirmed, Producer,
-                RemainingChunks, ReplyAfterStore, Send, StoreMessageSentInProgress);
-        }
-
-        // copy state with new requested flag
-        public State WithRequested(bool requested)
-        {
-            return new State(requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, SupportResend,
-                FirstSeqNr, Unconfirmed, Producer, RemainingChunks, ReplyAfterStore, Send, StoreMessageSentInProgress);
-        }
-
-        // copy state with new remaining chunks
-        public State WithRemainingChunks(ImmutableList<SequencedMessage<T>> remainingChunks)
-        {
-            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, SupportResend, FirstSeqNr,
-                Unconfirmed, Producer,
-                remainingChunks, ReplyAfterStore, Send, StoreMessageSentInProgress);
-        }
-
-        // copy state with new reply after store
-        public State WithReplyAfterStore(ImmutableDictionary<long, IActorRef> replyAfterStore)
-        {
-            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, SupportResend, FirstSeqNr,
-                Unconfirmed, Producer,
-                RemainingChunks, replyAfterStore, Send, StoreMessageSentInProgress);
-        }
-
-        // copy state with new support resend
-        public State WithSupportResend(bool supportResend)
-        {
-            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, supportResend, FirstSeqNr,
-                Unconfirmed, Producer,
-                RemainingChunks, ReplyAfterStore, Send, StoreMessageSentInProgress);
-        }
-
-        // copy state with new send function
-        public State WithSend(Action<SequencedMessage<T>> send)
-        {
-            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, SupportResend, FirstSeqNr,
-                Unconfirmed, Producer,
-                RemainingChunks, ReplyAfterStore, send, StoreMessageSentInProgress);
-        }
-
-        // copy state with new store message sent in progress
-        public State WithStoreMessageSentInProgress(long storeMessageSentInProgress)
-        {
-            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, SupportResend, FirstSeqNr,
-                Unconfirmed, Producer,
-                RemainingChunks, ReplyAfterStore, Send, storeMessageSentInProgress);
-        }
-        
-        // copy state with new FirstSeqNr
-        public State WithFirstSeqNr(long firstSeqNr)
-        {
-            return new State(Requested, CurrentSeqNr, ConfirmedSeqNr, RequestedSeqNr, SupportResend, firstSeqNr,
-                Unconfirmed, Producer,
-                RemainingChunks, ReplyAfterStore, Send, StoreMessageSentInProgress);
-        }
+        public Action<SequencedMessage<T>> Send { get; init; }
     }
 
     #endregion
@@ -274,7 +183,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         Receive<ProducerController.Start<T>>(start =>
         {
             AssertLocalProducer(start.Producer);
-            CurrentState = CurrentState.WithProducer(start.Producer);
+            CurrentState = CurrentState with { Producer = start.Producer };
 
             if (IsReadyForActivation())
                 BecomeActive(CreateState(start.Producer, consumerController, initialState.Value));
@@ -335,7 +244,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             requested = false;
         }
 
-        CurrentState = CurrentState.WithRequested(requested);
+        CurrentState = CurrentState with { Requested = requested };
 
         Become(Active);
     }
@@ -362,9 +271,12 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
                     DurableProducerQueue.MessageSent<T>.FromMessageOrChunked(seqMsg.SeqNr, seqMsg.Message, seqMsg.Ack,
                         DurableProducerQueue.NoQualifier, _timeProvider.Now.Ticks), 1);
 
-                CurrentState = CurrentState.WithRemainingChunks(chunks)
-                    .WithReplyAfterStore(newReplyAfterStore)
-                    .WithStoreMessageSentInProgress(seqMsg.SeqNr);
+                CurrentState = CurrentState with
+                {
+                    RemainingChunks = chunks,
+                    ReplyAfterStore = newReplyAfterStore,
+                    StoreMessageSentInProgress = seqMsg.SeqNr
+                };
             }
         });
 
@@ -386,36 +298,40 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
                     DurableProducerQueue.MessageSent<T>.FromMessageOrChunked(seqMsg.SeqNr, seqMsg.Message, seqMsg.Ack,
                         DurableProducerQueue.NoQualifier, _timeProvider.Now.Ticks), 1);
 
-                CurrentState = CurrentState.WithRemainingChunks(chunks)
-                    .WithStoreMessageSentInProgress(seqMsg.SeqNr);
+                CurrentState = CurrentState with
+                {
+                    RemainingChunks = chunks,
+                    StoreMessageSentInProgress = seqMsg.SeqNr
+                };
             }
         });
 
-        Receive<StoreMessageSentCompleted<T>>(completed => { ReceiveStoreMessageSentCompleted(completed.MessageSent.SeqNr); });
+        Receive<StoreMessageSentCompleted<T>>(completed =>
+        {
+            ReceiveStoreMessageSentCompleted(completed.MessageSent.SeqNr);
+        });
 
         Receive<StoreMessageSentFailed<T>>(ReceiveStoreMessageSentFailed);
 
-        Receive<Request>(r =>
-        {
-            ReceiveRequest(r.ConfirmedSeqNo, r.RequestUpToSeqNo, r.SupportResend, r.ViaTimeout);
-        });
+        Receive<Request>(r => { ReceiveRequest(r.ConfirmedSeqNo, r.RequestUpToSeqNo, r.SupportResend, r.ViaTimeout); });
 
         Receive<Ack>(ack => ReceiveAck(ack.ConfirmedSeqNr));
-        
+
         Receive<SendChunk>(_ => ReceiveSendChunk());
 
         Receive<Resend>(resend => ReceiveResend(resend.FromSeqNr));
 
         Receive<ResendFirst>(_ => ReceiveResendFirst());
-        
+
         Receive<ResendFirstUnconfirmed>(_ => ReceiveResendFirstUnconfirmed());
 
         Receive<ProducerController.Start<T>>(ReceiveStart);
-        
+
         Receive<RegisterConsumer<T>>(c => ReceiveRegisterConsumer(c.ConsumerController));
-        
-        Receive<DurableQueueTerminated>(terminated => throw new IllegalStateException("DurableQueue was unexpectedly terminated."));
-        
+
+        Receive<DurableQueueTerminated>(terminated =>
+            throw new IllegalStateException("DurableQueue was unexpectedly terminated."));
+
         ReceiveAny(_ => throw new InvalidOperationException($"Unexpected message: {_.GetType()}"));
     }
 
@@ -490,12 +406,15 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             newRequested = true;
         }
 
-        CurrentState = CurrentState.WithUnconfirmed(newUnconfirmed)
-            .WithRequested(newRequested)
-            .WithCurrentSeqNr(CurrentState.CurrentSeqNr + 1)
-            .WithReplyAfterStore(newReplyAfterStore)
-            .WithRemainingChunks(remainingChunks)
-            .WithStoreMessageSentInProgress(0);
+        CurrentState = CurrentState with
+        {
+            Unconfirmed = newUnconfirmed,
+            Requested = newRequested,
+            CurrentSeqNr = CurrentState.CurrentSeqNr + 1,
+            ReplyAfterStore = newReplyAfterStore,
+            RemainingChunks = remainingChunks,
+            StoreMessageSentInProgress = 0
+        };
     }
 
     private State OnAck(long newConfirmedSeqNr)
@@ -533,8 +452,12 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
                     DurableProducerQueue.NoQualifier, _timeProvider.Now.Ticks));
         });
 
-        return CurrentState.WithConfirmedSeqNr(newMaxConfirmedSeqNr).WithReplyAfterStore(newReplyAfterStore)
-            .WithUnconfirmed(newUnconfirmed);
+        return CurrentState = CurrentState with
+        {
+            ConfirmedSeqNr = newConfirmedSeqNr,
+            ReplyAfterStore = newReplyAfterStore,
+            Unconfirmed = newUnconfirmed
+        };
     }
 
     private void ReceiveRequest(long newConfirmedSeqNr, long newRequestedSeqNr, bool supportResend, bool viaTimeout)
@@ -575,7 +498,8 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             }
             else if (!CurrentState.Requested && (newRequestedSeqNr2 - CurrentState.RequestedSeqNr) > 0)
             {
-                CurrentState.Producer.Tell(new RequestNext<T>(ProducerId, CurrentState.CurrentSeqNr, newConfirmedSeqNr, Self));
+                CurrentState.Producer.Tell(new RequestNext<T>(ProducerId, CurrentState.CurrentSeqNr, newConfirmedSeqNr,
+                    Self));
                 newRequested = true;
             }
             else
@@ -583,15 +507,21 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
                 newRequested = CurrentState.Requested;
             }
 
-            CurrentState = stateAfterAck.WithRequested(newRequested)
-                .WithSupportResend(supportResend)
-                .WithRequestedSeqNr(newRequestedSeqNr2)
-                .WithUnconfirmed(newUnconfirmed);
+            CurrentState = CurrentState with
+            {
+                Requested = newRequested,
+                SupportResend = supportResend,
+                RequestedSeqNr = newRequestedSeqNr2,
+                Unconfirmed = newUnconfirmed
+            };
         }
         else
         {
-            CurrentState = CurrentState.WithSupportResend(supportResend)
-                .WithUnconfirmed(newUnconfirmed);
+            CurrentState = CurrentState with
+            {
+                SupportResend = supportResend,
+                Unconfirmed = newUnconfirmed
+            };
         }
     }
 
@@ -630,7 +560,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             DurableProducerQueue.LoadState<T> Mapper(IActorRef r) => new DurableProducerQueue.LoadState<T>(r);
 
             var self = Self;
-            @ref.Ask<DurableProducerQueue.State<T>>(Mapper, timeout: timeout, cancellationToken:default)
+            @ref.Ask<DurableProducerQueue.State<T>>(Mapper, timeout: timeout, cancellationToken: default)
                 .PipeTo(self, success: state => new LoadStateReply<T>(state),
                     failure: ex => new LoadStateFailed(attempt)); // timeout
         });
@@ -705,10 +635,11 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         _log.Debug("Registering new producer [{0}], currentSeqNr [{1}]", start.Producer, CurrentState.CurrentSeqNr);
         if (CurrentState is { Requested: true, RemainingChunks.IsEmpty: true })
         {
-            start.Producer.Tell(new RequestNext<T>(ProducerId, CurrentState.CurrentSeqNr, CurrentState.ConfirmedSeqNr, Self));
+            start.Producer.Tell(new RequestNext<T>(ProducerId, CurrentState.CurrentSeqNr, CurrentState.ConfirmedSeqNr,
+                Self));
         }
 
-        CurrentState = CurrentState.WithProducer(start.Producer);
+        CurrentState = CurrentState with { Producer = start.Producer };
     }
 
     private void ReceiveRegisterConsumer(IActorRef consumerController)
@@ -733,7 +664,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             consumerController.Tell(msg);
         }
 
-        CurrentState = CurrentState.WithSend(Send).WithFirstSeqNr(newFirstSeqNr);
+        CurrentState = CurrentState with { Send = Send, FirstSeqNr = newFirstSeqNr };
     }
 
     private void ReceiveSendChunk()
@@ -759,7 +690,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
                 StoreMessageSent(
                     DurableProducerQueue.MessageSent<T>.FromMessageOrChunked(seqMsg.SeqNr, seqMsg.Message, seqMsg.Ack,
                         DurableProducerQueue.NoQualifier, _timeProvider.Now.Ticks), 1);
-                CurrentState = CurrentState.WithStoreMessageSentInProgress(seqMsg.SeqNr);
+                CurrentState = CurrentState with { StoreMessageSentInProgress = seqMsg.SeqNr };
             }
         }
     }
@@ -922,9 +853,13 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
                             firstChunk.Ack, DurableProducerQueue.NoQualifier, _timeProvider.Now.Ticks),
                         attempt: f.Attempt + 1);
 
-                    CurrentState = CurrentState.WithStoreMessageSentInProgress(firstChunk.SeqNr)
-                        .WithRemainingChunks(newRemainingChunks).WithUnconfirmed(newUnconfirmed)
-                        .WithCurrentSeqNr(firstChunk.SeqNr);
+                    CurrentState = CurrentState with
+                    {
+                        StoreMessageSentInProgress = firstChunk.SeqNr,
+                        RemainingChunks = newRemainingChunks,
+                        Unconfirmed = newUnconfirmed,
+                        CurrentSeqNr = firstChunk.SeqNr
+                    };
                 }
             }
         }
@@ -938,18 +873,20 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             // need to mark the first unconfirmed message as "first" again, so the delivery-state inside the ConsumerController is correct
             var newUnconfirmed = ImmutableList.Create(CurrentState.Unconfirmed.First().AsFirst())
                 .AddRange(CurrentState.Unconfirmed.Skip(1));
-            CurrentState = CurrentState.WithUnconfirmed(newUnconfirmed);
+
+            CurrentState = CurrentState with { Unconfirmed = newUnconfirmed };
         }
     }
 
 
     private void StoreMessageSent(DurableProducerQueue.MessageSent<T> messageSent, int attempt)
     {
-        DurableProducerQueue.StoreMessageSent<T> Mapper(IActorRef r) => new DurableProducerQueue.StoreMessageSent<T>(messageSent, r);
+        DurableProducerQueue.StoreMessageSent<T> Mapper(IActorRef r) =>
+            new DurableProducerQueue.StoreMessageSent<T>(messageSent, r);
 
         var self = Self;
         DurableProducerQueueRef.Value.Ask<DurableProducerQueue.StoreMessageSentAck>(Mapper,
-                Settings.DurableQueueRequestTimeout, cancellationToken:default)
+                Settings.DurableQueueRequestTimeout, cancellationToken: default)
             .PipeTo(self, success: ack => new StoreMessageSentCompleted<T>(messageSent),
                 failure: ex => new StoreMessageSentFailed<T>(messageSent, attempt));
     }
