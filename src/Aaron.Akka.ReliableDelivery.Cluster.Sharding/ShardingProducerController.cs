@@ -175,109 +175,111 @@ public static class ShardingProducerController
                 resendFirstUnconfirmedIdleTimeout: config.GetTimeSpan("resend-first-unconfirmed-idle-timeout"),
                 producerControllerSettings: ProducerController.Settings.Create(config));
         }
+    }
 
-        internal sealed record Ack(string OutKey, long OutSeqNr);
+    internal sealed record Ack(string OutKey, long OutSeqNr);
 
-        internal sealed record AskTimeout(string OutKey, long OutSeqNr);
+    internal sealed record AskTimeout(string OutKey, long OutSeqNr);
 
-        internal sealed class WrappedRequestNext<T>
+    internal sealed class WrappedRequestNext<T>
+    {
+        public WrappedRequestNext(ProducerController.RequestNext<T> requestNext)
         {
-            public WrappedRequestNext(ProducerController.RequestNext<T> requestNext)
-            {
-                RequestNext = requestNext;
-            }
-
-            public ProducerController.RequestNext<T> RequestNext { get; }
+            RequestNext = requestNext;
         }
 
-        internal sealed record Msg(ShardingEnvelope Envelope, long AlreadyStored)
+        public ProducerController.RequestNext<T> RequestNext { get; }
+    }
+
+    internal sealed record Msg(ShardingEnvelope Envelope, long AlreadyStored)
+    {
+        public bool IsAlreadyStored => AlreadyStored > 0;
+    }
+
+    internal sealed record LoadStateReply<T>(DurableProducerQueue.State<T> State);
+
+    internal sealed record LoadStateFailed(int Attempt);
+
+    internal sealed record StoreMessageSentReply(DurableProducerQueue.StoreMessageSentAck Ack);
+
+    internal sealed record StoreMessageSentFailed<T>(DurableProducerQueue.StoreMessageSent<T> MessageSent,
+        int Attempt);
+
+    internal sealed record StoreMessageSentCompleted<T>(DurableProducerQueue.MessageSent<T> MessageSent);
+
+    internal sealed class DurableQueueTerminated
+    {
+        public static readonly DurableQueueTerminated Instance = new DurableQueueTerminated();
+
+        private DurableQueueTerminated()
         {
-            public bool IsAlreadyStored => AlreadyStored > 0;
+        }
+    }
+
+    internal sealed class ResendFirstUnconfirmed
+    {
+        public static readonly ResendFirstUnconfirmed Instance = new ResendFirstUnconfirmed();
+
+        private ResendFirstUnconfirmed()
+        {
+        }
+    }
+
+    internal sealed class CleanupUnused
+    {
+        public static readonly CleanupUnused Instance = new CleanupUnused();
+
+        private CleanupUnused()
+        {
+        }
+    }
+
+    internal record struct Buffered<T>(long TotalSeqNr, T Msg, Option<IActorRef> ReplyTo);
+
+    internal record struct Unconfirmed<T>(long TotalSeqNr, long OutSeqNr, Option<IActorRef> ReplyTo);
+
+    internal record struct OutState<T>
+    {
+        public OutState(EntityId EntityId, IActorRef ProducerController, Option<IActorRef> NextTo,
+            ImmutableList<Buffered<T>> Buffered, long SeqNr, ImmutableList<Unconfirmed<T>> Unconfirmed, long Timestamp)
+        {
+            this.EntityId = EntityId;
+            this.ProducerController = ProducerController;
+            this.NextTo = NextTo;
+            this.Buffered = Buffered;
+            this.SeqNr = SeqNr;
+            this.Unconfirmed = Unconfirmed;
+            this.Timestamp = Timestamp;
+
+            if (NextTo.HasValue && Buffered.Any())
+                throw new IllegalStateException("NextTo and Buffered shouldn't both be nonEmpty");
         }
 
-        internal sealed record LoadStateReply<T>(DurableProducerQueue.State<T> State);
+        public EntityId EntityId { get; set; }
+        public IActorRef ProducerController { get; set; }
+        public Option<IActorRef> NextTo { get; set; }
+        public ImmutableList<Buffered<T>> Buffered { get; set; }
+        public long SeqNr { get; set; }
+        public ImmutableList<Unconfirmed<T>> Unconfirmed { get; set; }
+        public long Timestamp { get; set; }
 
-        internal sealed record LoadStateFailed(int Attempt);
-
-        internal sealed record StoreMessageSentReply(DurableProducerQueue.StoreMessageSentAck Ack);
-
-        internal sealed record StoreMessageSentFailed<T>(DurableProducerQueue.StoreMessageSent<T> MessageSent,
-            int Attempt);
-
-        internal sealed record StoreMessageSentCompleted<T>(DurableProducerQueue.MessageSent<T> MessageSent);
-
-        internal sealed class DurableQueueTerminated
+        public void Deconstruct(out EntityId EntityId, out IActorRef ProducerController, out Option<IActorRef> NextTo,
+            out ImmutableList<Buffered<T>> Buffered, out long SeqNr, out ImmutableList<Unconfirmed<T>> Unconfirmed,
+            out long Timestamp)
         {
-            public static readonly DurableQueueTerminated Instance = new DurableQueueTerminated();
-
-            private DurableQueueTerminated()
-            {
-            }
+            EntityId = this.EntityId;
+            ProducerController = this.ProducerController;
+            NextTo = this.NextTo;
+            Buffered = this.Buffered;
+            SeqNr = this.SeqNr;
+            Unconfirmed = this.Unconfirmed;
+            Timestamp = this.Timestamp;
         }
+    };
 
-        internal sealed class ResendFirstUnconfirmed
-        {
-            public static readonly ResendFirstUnconfirmed Instance = new ResendFirstUnconfirmed();
-
-            private ResendFirstUnconfirmed()
-            {
-            }
-        }
-
-        internal sealed class CleanupUnused
-        {
-            public static readonly CleanupUnused Instance = new CleanupUnused();
-
-            private CleanupUnused()
-            {
-            }
-        }
-
-        internal record struct Buffered<T>(long TotalSeqNr, T Msg, Option<IActorRef> ReplyTo);
-
-        internal record struct Unconfirmed<T>(long TotalSeqNr, long OutSeqNr, Option<IActorRef> ReplyTo);
-
-        internal record struct OutState<T>
-        {
-            public OutState(EntityId EntityId, IActorRef ProducerController, Option<IActorRef> NextTo,
-                ImmutableList<Buffered<T>> Buffered, long SeqNr, ImmutableList<Unconfirmed<T>> Unconfirmed, long Timestamp)
-            {
-                this.EntityId = EntityId;
-                this.ProducerController = ProducerController;
-                this.NextTo = NextTo;
-                this.Buffered = Buffered;
-                this.SeqNr = SeqNr;
-                this.Unconfirmed = Unconfirmed;
-                this.Timestamp = Timestamp;
-
-                if (NextTo.HasValue && Buffered.Any())
-                    throw new IllegalStateException("NextTo and Buffered shouldn't both be nonEmpty");
-            }
-
-            public EntityId EntityId { get; set; }
-            public IActorRef ProducerController { get; set; }
-            public Option<IActorRef> NextTo { get; set; }
-            public ImmutableList<Buffered<T>> Buffered { get; set; }
-            public long SeqNr { get; set; }
-            public ImmutableList<Unconfirmed<T>> Unconfirmed { get; set; }
-            public long Timestamp { get; set; }
-
-            public void Deconstruct(out EntityId EntityId, out IActorRef ProducerController, out Option<IActorRef> NextTo, out ImmutableList<Buffered<T>> Buffered, out long SeqNr, out ImmutableList<Unconfirmed<T>> Unconfirmed, out long Timestamp)
-            {
-                EntityId = this.EntityId;
-                ProducerController = this.ProducerController;
-                NextTo = this.NextTo;
-                Buffered = this.Buffered;
-                SeqNr = this.SeqNr;
-                Unconfirmed = this.Unconfirmed;
-                Timestamp = this.Timestamp;
-            }
-        };
-
-        internal record struct State<T>(long CurrentSeqNr, IActorRef Producer,
-            ImmutableDictionary<string, OutState<T>> OutStates, ImmutableDictionary<long, IActorRef> ReplyAfterStore)
-        {
-            public long BufferSize => OutStates.Values.Aggregate(0L, (acc, outState) => acc + outState.Buffered.Count);
-        }
+    internal record struct State<T>(long CurrentSeqNr, IActorRef Producer,
+        ImmutableDictionary<string, OutState<T>> OutStates, ImmutableDictionary<long, IActorRef> ReplyAfterStore)
+    {
+        public long BufferSize => OutStates.Values.Aggregate(0L, (acc, outState) => acc + outState.Buffered.Count);
     }
 }
