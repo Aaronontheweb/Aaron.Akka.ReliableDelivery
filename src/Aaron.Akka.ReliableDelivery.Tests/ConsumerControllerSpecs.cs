@@ -620,7 +620,7 @@ public class ConsumerControllerSpecs : TestKit
     public async Task ConsumerController_without_resending_must_accept_lost_message()
     {
         NextId();
-        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None, Settings.WithOnlyFlowControl(true)),
+        var consumerController = Sys.ActorOf(ConsumerController.Create<Job>(Sys, Option<IActorRef>.None, Settings with { OnlyFlowControl = true }),
             $"consumerController-{_idCount}");
         var producerControllerProbe = CreateTestProbe();
         

@@ -133,7 +133,7 @@ public static class ShardingProducerController
         }
     }
 
-    public sealed class Settings
+    public sealed record Settings
     {
         public Settings(int bufferSize, TimeSpan internalAskTimeout, TimeSpan cleanupUnusedAfter,
             TimeSpan resendFirstUnconfirmedIdleTimeout, ProducerController.Settings producerControllerSettings)
@@ -145,45 +145,15 @@ public static class ShardingProducerController
             ProducerControllerSettings = producerControllerSettings;
         }
 
-        public int BufferSize { get; }
+        public int BufferSize { get; init; }
 
-        public TimeSpan InternalAskTimeout { get; }
+        public TimeSpan InternalAskTimeout { get; init; }
 
-        public TimeSpan CleanupUnusedAfter { get; }
+        public TimeSpan CleanupUnusedAfter { get; init; }
 
-        public TimeSpan ResendFirstUnconfirmedIdleTimeout { get; }
+        public TimeSpan ResendFirstUnconfirmedIdleTimeout { get; init; }
 
-        public ProducerController.Settings ProducerControllerSettings { get; }
-
-        public Settings WithBufferSize(int bufferSize)
-        {
-            return new Settings(bufferSize, InternalAskTimeout, CleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout,
-                ProducerControllerSettings);
-        }
-
-        public Settings WithInternalAskTimeout(TimeSpan internalAskTimeout)
-        {
-            return new Settings(BufferSize, internalAskTimeout, CleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout,
-                ProducerControllerSettings);
-        }
-
-        public Settings WithCleanupUnusedAfter(TimeSpan cleanupUnusedAfter)
-        {
-            return new Settings(BufferSize, InternalAskTimeout, cleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout,
-                ProducerControllerSettings);
-        }
-
-        public Settings WithResendFirstUnconfirmedIdleTimeout(TimeSpan resendFirstUnconfirmedIdleTimeout)
-        {
-            return new Settings(BufferSize, InternalAskTimeout, CleanupUnusedAfter, resendFirstUnconfirmedIdleTimeout,
-                ProducerControllerSettings);
-        }
-
-        public Settings WithProducerControllerSettings(ProducerController.Settings producerControllerSettings)
-        {
-            return new Settings(BufferSize, InternalAskTimeout, CleanupUnusedAfter, ResendFirstUnconfirmedIdleTimeout,
-                producerControllerSettings);
-        }
+        public ProducerController.Settings ProducerControllerSettings { get; init; }
 
         /// <summary>
         /// Factory method for creating from a <see cref="Config"/> corresponding to `akka.reliable-delivery.sharding.producer-controller`

@@ -35,7 +35,7 @@ namespace Aaron.Akka.ReliableDelivery.Cluster.Sharding;
 [ApiMayChange]
 public static class ShardingConsumerController
 {
-    public class Settings
+    public sealed record Settings
     {
         private Settings(int bufferSize, ConsumerController.Settings consumerControllerSettings)
         {
@@ -43,13 +43,9 @@ public static class ShardingConsumerController
             ConsumerControllerSettings = consumerControllerSettings;
         }
 
-        public int BufferSize { get; }
+        public int BufferSize { get; init; }
         
-        public ConsumerController.Settings ConsumerControllerSettings { get; }
-        
-        public Settings WithBufferSize(int bufferSize) => new(bufferSize, ConsumerControllerSettings);
-        
-        public Settings WithConsumerControllerSettings(ConsumerController.Settings consumerControllerSettings) => new(BufferSize, consumerControllerSettings);
+        public ConsumerController.Settings ConsumerControllerSettings { get; init; }
 
         public static Settings Create(ActorSystem system)
         {
