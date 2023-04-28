@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Actor.Dsl;
 using Akka.Cluster.Sharding;
@@ -7,8 +8,12 @@ using Akka.Pattern;
 using Akka.Util;
 using Akka.Util.Extensions;
 using static Aaron.Akka.ReliableDelivery.Cluster.Sharding.ShardingProducerController;
-
 namespace Aaron.Akka.ReliableDelivery.Cluster.Sharding.Internal;
+
+using OutKey = String;
+using EntityId = String;
+using TotalSeqNr = Int64;
+using OutSeqNr = Int64;
 
 internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, IWithTimers
 {
@@ -20,6 +25,7 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
 
     public Option<IActorRef> DurableQueueRef { get; private set; } = Option<IActorRef>.None;
     private readonly Option<Props> _durableQueueProps;
+    private readonly ITimeProvider _timeProvider;
     
     public IActorRef MsgAdapter { get; private set; } = ActorRefs.Nobody;
 
@@ -31,12 +37,13 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
     public ITimerScheduler Timers { get; set; } = null!;
 
     public ShardingProducerController(string producerId, IActorRef shardRegion, Option<Props> durableQueueProps,
-        ShardingProducerController.Settings settings)
+        ShardingProducerController.Settings settings, ITimeProvider? timeProvider = null)
     {
         ProducerId = producerId;
         ShardRegion = shardRegion;
         _durableQueueProps = durableQueueProps;
         Settings = settings;
+        _timeProvider = timeProvider ?? DateTimeOffsetNowTimeProvider.Instance;
 
         WaitingForStart(Option<IActorRef>.None, CreateInitialState(_durableQueueProps.HasValue));
     }
@@ -138,22 +145,107 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
         if(initialState.IsEmpty || initialState.Value.Unconfirmed.IsEmpty)
             producer.Tell(new RequestNext<T>(MsgAdapter, Self,ImmutableHashSet<string>.Empty, ImmutableDictionary<string, int>.Empty));
         
+        CurrentState = CurrentState with
+        {
+            Producer = producer,
+            CurrentSeqNr = initialState.HasValue ? initialState.Value.CurrentSeqNr : 0,
+        };
+        
         Become(Active);
         Stash.UnstashAll();
     }
 
     private void Active()
     {
-        Receive<Start<T>>(start =>
-        {
-            ProducerController.AssertLocalProducer(start.Producer);
-            
-        });
     }
 
     #endregion
 
     #region Internal Methods
+
+    private void OnMsg(EntityId entityId, T msg, Option<IActorRef> replyTo, TotalSeqNr totalSeqNr,
+        ImmutableDictionary<TotalSeqNr, IActorRef> newReplyAfterStore)
+    {
+        var outKey = $"{ProducerId}-{entityId}";
+        if (CurrentState.OutStates.TryGetValue(outKey, out var outState))
+        {
+            // there is demand, send immediately
+            if (outState.NextTo.HasValue)
+            {
+                Send(msg, outKey, outState.SeqNr, outState.NextTo.Value);
+                var newUnconfirmed = outState.Unconfirmed.Add(new Unconfirmed<T>(totalSeqNr, outState.SeqNr, replyTo));
+
+                CurrentState = CurrentState with
+                {
+                    OutStates = CurrentState.OutStates.SetItem(outKey, outState with
+                    {
+                        SeqNr = outState.SeqNr + 1,
+                        Unconfirmed = newUnconfirmed,
+                        NextTo = Option<IActorRef>.None,
+                        LastUsed = _timeProvider.Now.Ticks
+                    }),
+                    ReplyAfterStore = newReplyAfterStore
+                };
+            }
+            else
+            {
+                var buffered = outState.Buffered;
+                
+                // no demand, buffer
+                if(CurrentState.BufferSize >= Settings.BufferSize)
+                    throw new IllegalStateException($"Buffer overflow, current size [{CurrentState.BufferSize}] >= max [{Settings.BufferSize}]");
+                _log.Debug("Buffering message to entityId [{0}], buffer size for entityId [{1}]", entityId, buffered.Count + 1);
+                
+                var newBuffered = buffered.Add(new Buffered<T>(totalSeqNr, msg, replyTo));
+                var newS = CurrentState with
+                {
+                    OutStates = CurrentState.OutStates.SetItem(outKey, outState with
+                    {
+                        Buffered = newBuffered
+                    }),
+                    ReplyAfterStore = newReplyAfterStore
+                };
+                // send an updated RequestNext to indicate buffer usage
+                CurrentState.Producer.Tell(CreateRequestNext(newS));
+                CurrentState = newS;
+            }
+        }
+        else
+        {
+            _log.Debug("Creating ProducerController for entityId [{0}]", entityId);
+            // TODO: need to pass in custom send function for ProducerController in order to map SequencedMessage to ShardingEnvelope
+        }
+    }
+
+    private RequestNext<T> CreateRequestNext(State<T> state)
+    {
+        var entitiesWithDemand = state.OutStates.Values.Where(c => c.NextTo.HasValue).Select(c => c.EntityId).ToImmutableHashSet();
+        var bufferedForEntitiesWithoutDemand = state.OutStates.Values.Where(c => c.NextTo.IsEmpty)
+            .ToImmutableDictionary(c => c.EntityId, c => c.Buffered.Count);
+        
+        return new RequestNext<T>(MsgAdapter, Self, entitiesWithDemand, bufferedForEntitiesWithoutDemand);
+    }
+
+    private void Send(T msg, OutKey outKey, OutSeqNr outSeqNr, IActorRef nextTo)
+    {
+        if(_log.IsDebugEnabled) // TODO: add trace support
+            _log.Debug("Sending [{0}] to [{1}] with outSeqNr [{2}]", msg?.GetType().Name, nextTo, outSeqNr);
+
+        ProducerController.MessageWithConfirmation<T> Transform(IActorRef askTarget)
+        {
+            return new ProducerController.MessageWithConfirmation<T>(msg, askTarget);
+        }
+
+        var self = Self;
+        nextTo.Ask<long>(Transform, Settings.InternalAskTimeout, CancellationToken.None)
+            .PipeTo(self, success: seqNr =>
+                {
+                    if (seqNr != outSeqNr)
+                        _log.Error("Inconsistent Ack seqNr [{0}] != [{1}]", seqNr, outSeqNr);
+                    return new Ack(outKey, seqNr);
+                },
+                failure: _ => new AskTimeout(outKey, outSeqNr));
+    }
 
     private static Option<DurableProducerQueue.State<T>> CreateInitialState(bool hasDurableQueue)
     {

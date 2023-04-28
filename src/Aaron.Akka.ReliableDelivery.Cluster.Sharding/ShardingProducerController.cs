@@ -51,7 +51,7 @@ public static class ShardingProducerController
         public IActorRef Producer { get; }
     }
 
-    public sealed class MessageWithConfirmation<T> : IShardingProducerControllerCommand<T>
+    public sealed record MessageWithConfirmation<T> : IShardingProducerControllerCommand<T>
     {
         public MessageWithConfirmation(string entityId, T message, IActorRef replyTo)
         {
@@ -60,11 +60,11 @@ public static class ShardingProducerController
             EntityId = entityId;
         }
 
-        public EntityId EntityId { get; }
+        public EntityId EntityId { get; init; }
 
-        public T Message { get; }
+        public T Message { get; init; }
 
-        public IActorRef ReplyTo { get; }
+        public IActorRef ReplyTo { get; init; }
     }
 
     /// <summary>
@@ -80,7 +80,7 @@ public static class ShardingProducerController
     /// but it's recommended to only send one message and wait for next <see cref="RequestNext{T}"/> before sending more messages.
     /// </summary>
     /// <typeparam name="T">The type of message that can be handled by the consumer actors.</typeparam>
-    public sealed class RequestNext<T>
+    public sealed record RequestNext<T>
     {
         public RequestNext(IActorRef sendNextTo, IActorRef askNextTo, ImmutableHashSet<string> entitiesWithDemand,
             ImmutableDictionary<string, int> bufferedForEntitiesWithoutDemand)
@@ -91,13 +91,13 @@ public static class ShardingProducerController
             AskNextToRef = askNextTo;
         }
 
-        public IActorRef SendNextTo { get; }
+        public IActorRef SendNextTo { get; init; }
         
-        public IActorRef AskNextToRef { get; }
+        public IActorRef AskNextToRef { get; init; }
 
-        public ImmutableHashSet<EntityId> EntitiesWithDemand { get; }
+        public ImmutableHashSet<EntityId> EntitiesWithDemand { get; init; }
 
-        public ImmutableDictionary<EntityId, int> BufferedForEntitiesWithoutDemand { get; }
+        public ImmutableDictionary<EntityId, int> BufferedForEntitiesWithoutDemand { get; init; }
 
         /// <summary>
         /// Uses an Ask{T} to send the message to the SendNextTo actor and returns an Ack(long).
@@ -244,7 +244,7 @@ public static class ShardingProducerController
     internal record struct OutState<T>
     {
         public OutState(EntityId EntityId, IActorRef ProducerController, Option<IActorRef> NextTo,
-            ImmutableList<Buffered<T>> Buffered, long SeqNr, ImmutableList<Unconfirmed<T>> Unconfirmed, long Timestamp)
+            ImmutableList<Buffered<T>> Buffered, long SeqNr, ImmutableList<Unconfirmed<T>> Unconfirmed, long LastUsed)
         {
             this.EntityId = EntityId;
             this.ProducerController = ProducerController;
@@ -252,7 +252,7 @@ public static class ShardingProducerController
             this.Buffered = Buffered;
             this.SeqNr = SeqNr;
             this.Unconfirmed = Unconfirmed;
-            this.Timestamp = Timestamp;
+            this.LastUsed = LastUsed;
 
             if (NextTo.HasValue && Buffered.Any())
                 throw new IllegalStateException("NextTo and Buffered shouldn't both be nonEmpty");
@@ -264,7 +264,7 @@ public static class ShardingProducerController
         public ImmutableList<Buffered<T>> Buffered { get; init; }
         public long SeqNr { get; init; }
         public ImmutableList<Unconfirmed<T>> Unconfirmed { get; init; }
-        public long Timestamp { get; init; }
+        public long LastUsed { get; init; }
     };
 
     internal record struct State<T>(long CurrentSeqNr, IActorRef Producer,
