@@ -82,15 +82,18 @@ public static class ShardingProducerController
     /// <typeparam name="T">The type of message that can be handled by the consumer actors.</typeparam>
     public sealed class RequestNext<T>
     {
-        public RequestNext(IActorRef sendNextTo, ImmutableHashSet<string> entitiesWithDemand,
+        public RequestNext(IActorRef sendNextTo, IActorRef askNextTo, ImmutableHashSet<string> entitiesWithDemand,
             ImmutableDictionary<string, int> bufferedForEntitiesWithoutDemand)
         {
             SendNextTo = sendNextTo;
             EntitiesWithDemand = entitiesWithDemand;
             BufferedForEntitiesWithoutDemand = bufferedForEntitiesWithoutDemand;
+            AskNextToRef = askNextTo;
         }
 
         public IActorRef SendNextTo { get; }
+        
+        public IActorRef AskNextToRef { get; }
 
         public ImmutableHashSet<EntityId> EntitiesWithDemand { get; }
 
@@ -112,7 +115,7 @@ public static class ShardingProducerController
                 return new MessageWithConfirmation<T>(entityId, msg, r);
             }
 
-            return SendNextTo.Ask<long>(Wrapper, cancellationToken: cancellationToken, timeout: null);
+            return AskNextToRef.Ask<long>(Wrapper, cancellationToken: cancellationToken, timeout: null);
         }
 
         /// <summary>
@@ -129,7 +132,7 @@ public static class ShardingProducerController
         /// </remarks>
         public void AskNextTo(MessageWithConfirmation<T> msgWithConfirmation)
         {
-            SendNextTo.Tell(msgWithConfirmation);
+            AskNextToRef.Tell(msgWithConfirmation);
         }
     }
 
@@ -255,31 +258,22 @@ public static class ShardingProducerController
                 throw new IllegalStateException("NextTo and Buffered shouldn't both be nonEmpty");
         }
 
-        public EntityId EntityId { get; set; }
-        public IActorRef ProducerController { get; set; }
-        public Option<IActorRef> NextTo { get; set; }
-        public ImmutableList<Buffered<T>> Buffered { get; set; }
-        public long SeqNr { get; set; }
-        public ImmutableList<Unconfirmed<T>> Unconfirmed { get; set; }
-        public long Timestamp { get; set; }
-
-        public void Deconstruct(out EntityId EntityId, out IActorRef ProducerController, out Option<IActorRef> NextTo,
-            out ImmutableList<Buffered<T>> Buffered, out long SeqNr, out ImmutableList<Unconfirmed<T>> Unconfirmed,
-            out long Timestamp)
-        {
-            EntityId = this.EntityId;
-            ProducerController = this.ProducerController;
-            NextTo = this.NextTo;
-            Buffered = this.Buffered;
-            SeqNr = this.SeqNr;
-            Unconfirmed = this.Unconfirmed;
-            Timestamp = this.Timestamp;
-        }
+        public EntityId EntityId { get; init; }
+        public IActorRef ProducerController { get; init; }
+        public Option<IActorRef> NextTo { get; init; }
+        public ImmutableList<Buffered<T>> Buffered { get; init; }
+        public long SeqNr { get; init; }
+        public ImmutableList<Unconfirmed<T>> Unconfirmed { get; init; }
+        public long Timestamp { get; init; }
     };
 
     internal record struct State<T>(long CurrentSeqNr, IActorRef Producer,
         ImmutableDictionary<string, OutState<T>> OutStates, ImmutableDictionary<long, IActorRef> ReplyAfterStore)
     {
         public long BufferSize => OutStates.Values.Aggregate(0L, (acc, outState) => acc + outState.Buffered.Count);
+        
+        public static readonly State<T> Empty = new(0, ActorRefs.Nobody, ImmutableDictionary<string, OutState<T>>.Empty,
+            ImmutableDictionary<long, IActorRef>.Empty);
+
     }
 }
