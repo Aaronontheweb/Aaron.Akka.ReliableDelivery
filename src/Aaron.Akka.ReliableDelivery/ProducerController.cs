@@ -84,7 +84,7 @@ public static class ProducerController
             DateTimeOffsetNowTimeProvider.Instance, sendAdapter, fuzzing));
     }
 
-    public sealed class Settings
+    public sealed record Settings
     {
         public const int DefaultDeliveryBufferSize = 128;
 
@@ -126,51 +126,23 @@ public static class ProducerController
         ///     If set to <c>null</c>, we will not chunk large messages. Otherwise, we will chunk messages larger than this value
         ///     into [1,N] chunks of this size.
         /// </summary>
-        public int? ChunkLargeMessagesBytes { get; }
+        public int? ChunkLargeMessagesBytes { get; init; }
 
 
         /// <summary>
         /// The timeout for each request to the durable queue.
         /// </summary>
-        public TimeSpan DurableQueueRequestTimeout { get; }
+        public TimeSpan DurableQueueRequestTimeout { get; init; }
 
         /// <summary>
         /// Number of retries allowed for each request to the durable queue.
         /// </summary>
-        public int DurableQueueRetryAttempts { get; }
+        public int DurableQueueRetryAttempts { get; init; }
 
         /// <summary>
         /// Timeframe for re-delivery of the first message
         /// </summary>
-        public TimeSpan DurableQueueResendFirstInterval { get; }
-        
-        // method for immutably copying the Settings with a new value for ChunkLargeMessagesBytes
-        public Settings WithChunkLargeMessagesBytes(int? chunkLargeMessagesBytes)
-        {
-            return new Settings(DurableQueueRequestTimeout, DurableQueueRetryAttempts, DurableQueueResendFirstInterval,
-                chunkLargeMessagesBytes);
-        }
-        
-        // method for immutably copying the Settings with a new value for DurableQueueRequestTimeout
-        public Settings WithDurableQueueRequestTimeout(TimeSpan durableQueueRequestTimeout)
-        {
-            return new Settings(durableQueueRequestTimeout, DurableQueueRetryAttempts, DurableQueueResendFirstInterval,
-                ChunkLargeMessagesBytes);
-        }
-        
-        // method for immutably copying the Settings with a new value for DurableQueueRetryAttempts
-        public Settings WithDurableQueueRetryAttempts(int durableQueueRetryAttempts)
-        {
-            return new Settings(DurableQueueRequestTimeout, durableQueueRetryAttempts, DurableQueueResendFirstInterval,
-                ChunkLargeMessagesBytes);
-        }
-        
-        // method for immutably copying the Settings with a new value for DurableQueueResendFirstInterval
-        public Settings WithDurableQueueResendFirstInterval(TimeSpan durableQueueResendFirstInterval)
-        {
-            return new Settings(DurableQueueRequestTimeout, DurableQueueRetryAttempts, durableQueueResendFirstInterval,
-                ChunkLargeMessagesBytes);
-        }
+        public TimeSpan DurableQueueResendFirstInterval { get; init; }
     }
 
 

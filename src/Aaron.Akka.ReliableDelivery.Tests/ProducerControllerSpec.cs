@@ -269,7 +269,7 @@ public class ProducerControllerSpec : TestKit
         var producerController =
             Sys.ActorOf(
                 ProducerController.Create<Job>(Sys, ProducerId, Option<Props>.None,
-                    ProducerController.Settings.Create(Sys).WithChunkLargeMessagesBytes(1)),
+                    ProducerController.Settings.Create(Sys) with { ChunkLargeMessagesBytes = 1}),
                 $"producerController-{_idCount}");
         
         var producerProbe = CreateTestProbe();

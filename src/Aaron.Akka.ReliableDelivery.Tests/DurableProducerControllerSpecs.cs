@@ -175,7 +175,7 @@ public class DurableProducerControllerSpecs : TestKit
             stateHolder, _ => false);
         var producerController = Sys.ActorOf(
             ProducerController.Create<Job>(Sys, ProducerId, durable,
-                ProducerController.Settings.Create(Sys).WithChunkLargeMessagesBytes(1)),
+                ProducerController.Settings.Create(Sys) with { ChunkLargeMessagesBytes = 1}),
             $"producerController-{_idCount}");
         var producerProbe = CreateTestProbe();
 
@@ -244,7 +244,7 @@ public class DurableProducerControllerSpecs : TestKit
         var producerController =
             Sys.ActorOf(
                 ProducerController.Create<Job>(Sys, ProducerId, durable,
-                    ProducerController.Settings.Create(Sys).WithChunkLargeMessagesBytes(1)),
+                    ProducerController.Settings.Create(Sys) with { ChunkLargeMessagesBytes = 1}),
                 $"producerController-{_idCount}");
         
         var producerProbe = CreateTestProbe();
