@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Aaron.Akka.ReliableDelivery.Internal;
+using Akka;
 using Akka.Actor;
 using Akka.Actor.Dsl;
 using Akka.Cluster.Sharding;
@@ -8,6 +9,7 @@ using Akka.Pattern;
 using Akka.Util;
 using Akka.Util.Extensions;
 using static Aaron.Akka.ReliableDelivery.Cluster.Sharding.ShardingProducerController;
+
 namespace Aaron.Akka.ReliableDelivery.Cluster.Sharding.Internal;
 
 using OutKey = String;
@@ -26,8 +28,10 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
     public Option<IActorRef> DurableQueueRef { get; private set; } = Option<IActorRef>.None;
     private readonly Option<Props> _durableQueueProps;
     private readonly ITimeProvider _timeProvider;
-    
+
     public IActorRef MsgAdapter { get; private set; } = ActorRefs.Nobody;
+
+    public IActorRef RequestNextAdapter { get; private set; } = ActorRefs.Nobody;
 
     public State<T> CurrentState { get; private set; } = State<T>.Empty;
 
@@ -51,6 +55,18 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
     protected override void PreStart()
     {
         DurableQueueRef = AskLoadState();
+
+        // TODO: replace Akka.Actor.Dsl calls here with function refs, once we can find a better way to expose those
+        var self = Self;
+        RequestNextAdapter =
+            Context.ActorOf(
+                act =>
+                {
+                    act.Receive<ProducerController.RequestNext<T>>((msg, ctx) =>
+                    {
+                        self.Forward(new WrappedRequestNext<T>(msg));
+                    });
+                }, "requestNextAdapter");
     }
 
     #region Behaviors
@@ -94,7 +110,8 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
             }
             else
             {
-                _log.Warning("LoadState failed, attempt [{0}] of [{1}], retrying.", failed.Attempt, Settings.ProducerControllerSettings.DurableQueueRetryAttempts);
+                _log.Warning("LoadState failed, attempt [{0}] of [{1}], retrying.", failed.Attempt,
+                    Settings.ProducerControllerSettings.DurableQueueRetryAttempts);
                 // retry
                 AskLoadState(DurableQueueRef, failed.Attempt + 1);
             }
@@ -104,7 +121,7 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
         {
             throw new IllegalStateException("DurableQueue was unexpectedly terminated.");
         });
-        
+
         ReceiveAny(_ =>
         {
             CheckIfStashIsFull();
@@ -114,9 +131,11 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
 
     private void BecomeActive(IActorRef producer, Option<DurableProducerQueue.State<T>> initialState)
     {
-        Timers.StartPeriodicTimer(CleanupUnused.Instance, CleanupUnused.Instance, TimeSpan.FromMilliseconds(Settings.CleanupUnusedAfter.TotalMilliseconds / 2));
-        Timers.StartPeriodicTimer(ResendFirstUnconfirmed.Instance, ResendFirstUnconfirmed.Instance, TimeSpan.FromMilliseconds(Settings.ResendFirstUnconfirmedIdleTimeout.TotalMilliseconds / 2));
-        
+        Timers.StartPeriodicTimer(CleanupUnused.Instance, CleanupUnused.Instance,
+            TimeSpan.FromMilliseconds(Settings.CleanupUnusedAfter.TotalMilliseconds / 2));
+        Timers.StartPeriodicTimer(ResendFirstUnconfirmed.Instance, ResendFirstUnconfirmed.Instance,
+            TimeSpan.FromMilliseconds(Settings.ResendFirstUnconfirmedIdleTimeout.TotalMilliseconds / 2));
+
         // resend unconfirmed before other stashed messages
         initialState.OnSuccess(s =>
         {
@@ -127,11 +146,8 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
         var self = Self;
         MsgAdapter = Context.ActorOf(act =>
         {
-            act.Receive<ShardingEnvelope>((msg, ctx) =>
-            {
-                self.Forward(new Msg(msg, 0));
-            });
-            
+            act.Receive<ShardingEnvelope>((msg, ctx) => { self.Forward(new Msg(msg, 0)); });
+
             act.ReceiveAny((_, ctx) =>
             {
                 var errorMessage =
@@ -141,16 +157,17 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
                 ctx.Sender.Tell(new Status.Failure(new InvalidOperationException(errorMessage)));
             });
         }, "msg-adapter");
-        
-        if(initialState.IsEmpty || initialState.Value.Unconfirmed.IsEmpty)
-            producer.Tell(new RequestNext<T>(MsgAdapter, Self,ImmutableHashSet<string>.Empty, ImmutableDictionary<string, int>.Empty));
-        
+
+        if (initialState.IsEmpty || initialState.Value.Unconfirmed.IsEmpty)
+            producer.Tell(new RequestNext<T>(MsgAdapter, Self, ImmutableHashSet<string>.Empty,
+                ImmutableDictionary<string, int>.Empty));
+
         CurrentState = CurrentState with
         {
             Producer = producer,
             CurrentSeqNr = initialState.HasValue ? initialState.Value.CurrentSeqNr : 0,
         };
-        
+
         Become(Active);
         Stash.UnstashAll();
     }
@@ -190,12 +207,14 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
             else
             {
                 var buffered = outState.Buffered;
-                
+
                 // no demand, buffer
-                if(CurrentState.BufferSize >= Settings.BufferSize)
-                    throw new IllegalStateException($"Buffer overflow, current size [{CurrentState.BufferSize}] >= max [{Settings.BufferSize}]");
-                _log.Debug("Buffering message to entityId [{0}], buffer size for entityId [{1}]", entityId, buffered.Count + 1);
-                
+                if (CurrentState.BufferSize >= Settings.BufferSize)
+                    throw new IllegalStateException(
+                        $"Buffer overflow, current size [{CurrentState.BufferSize}] >= max [{Settings.BufferSize}]");
+                _log.Debug("Buffering message to entityId [{0}], buffer size for entityId [{1}]", entityId,
+                    buffered.Count + 1);
+
                 var newBuffered = buffered.Add(new Buffered<T>(totalSeqNr, msg, replyTo));
                 var newS = CurrentState with
                 {
@@ -214,21 +233,70 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
         {
             _log.Debug("Creating ProducerController for entityId [{0}]", entityId);
             // TODO: need to pass in custom send function for ProducerController in order to map SequencedMessage to ShardingEnvelope
+            Action<ConsumerController.SequencedMessage<T>> customSend = s =>
+            {
+                ShardRegion.Tell(new ShardingEnvelope(entityId, s));
+            };
+
+            var producer =
+                Context.ActorOf(
+                    Props.Create(() => new ProducerController<T>(outKey, Option<Props>.None, customSend,
+                        Settings.ProducerControllerSettings, _timeProvider, null)), entityId);
+            producer.Tell(new ProducerController.Start<T>(RequestNextAdapter));
+            CurrentState = CurrentState with
+            {
+                OutStates = CurrentState.OutStates.SetItem(outKey,
+                    new OutState<T>(entityId, producer, Option<IActorRef>.None,
+                        ImmutableList<Buffered<T>>.Empty.Add(new Buffered<T>(totalSeqNr, msg, replyTo)), 1L,
+                        ImmutableList<Unconfirmed<T>>.Empty, _timeProvider.Now.Ticks)),
+                ReplyAfterStore = newReplyAfterStore
+            };
         }
+    }
+
+    private ImmutableList<Unconfirmed<T>> OnAck(OutState<T> outState, long confirmedSeqNr)
+    {
+        var grouped = outState.Unconfirmed.GroupBy(c => c.OutSeqNr <= confirmedSeqNr).ToList();
+        var confirmed = grouped.Where(c => c.Key).SelectMany(c => c).ToImmutableList();
+        var newUnconfirmed = grouped.Where(c => !c.Key).SelectMany(c => c).ToImmutableList();
+
+        if (confirmed.Any())
+        {
+            foreach (var c in confirmed)
+            {
+                switch (c)
+                {
+                    case (_, _, { IsEmpty: true }): // no reply
+                        break;
+                    case (_, _, { IsEmpty: false } replyTo):
+                        replyTo.Value.Tell(Done.Instance);
+                        break;
+                }
+            }
+            
+            DurableQueueRef.OnSuccess(d =>
+            {
+                // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
+                d.Tell(new DurableProducerQueue.StoreMessageConfirmed<T>(confirmed.Last().TotalSeqNr, outState.EntityId, _timeProvider.Now.Ticks));
+            });
+        }
+
+        return newUnconfirmed;
     }
 
     private RequestNext<T> CreateRequestNext(State<T> state)
     {
-        var entitiesWithDemand = state.OutStates.Values.Where(c => c.NextTo.HasValue).Select(c => c.EntityId).ToImmutableHashSet();
+        var entitiesWithDemand = state.OutStates.Values.Where(c => c.NextTo.HasValue).Select(c => c.EntityId)
+            .ToImmutableHashSet();
         var bufferedForEntitiesWithoutDemand = state.OutStates.Values.Where(c => c.NextTo.IsEmpty)
             .ToImmutableDictionary(c => c.EntityId, c => c.Buffered.Count);
-        
+
         return new RequestNext<T>(MsgAdapter, Self, entitiesWithDemand, bufferedForEntitiesWithoutDemand);
     }
 
     private void Send(T msg, OutKey outKey, OutSeqNr outSeqNr, IActorRef nextTo)
     {
-        if(_log.IsDebugEnabled) // TODO: add trace support
+        if (_log.IsDebugEnabled) // TODO: add trace support
             _log.Debug("Sending [{0}] to [{1}] with outSeqNr [{2}]", msg?.GetType().Name, nextTo, outSeqNr);
 
         ProducerController.MessageWithConfirmation<T> Transform(IActorRef askTarget)
@@ -274,7 +342,7 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
         var loadTimeout = Settings.ProducerControllerSettings.DurableQueueRequestTimeout;
         durableProducerQueue.OnSuccess(@ref =>
         {
-            DurableProducerQueue.LoadState<T> Mapper(IActorRef r) => new DurableProducerQueue.LoadState<T>(r);
+            DurableProducerQueue.LoadState<T> Mapper(IActorRef r) => new(r);
 
             var self = Self;
             @ref.Ask<DurableProducerQueue.State<T>>(Mapper, timeout: loadTimeout, cancellationToken: default)
