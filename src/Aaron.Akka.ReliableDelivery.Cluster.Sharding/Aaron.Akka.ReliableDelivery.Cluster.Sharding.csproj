@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>$(LibraryFramework)</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Aaron.Akka.ReliableDelivery\Aaron.Akka.ReliableDelivery.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Akka.Cluster.Sharding" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Remove="delivery.conf" />
+      <Resource Include="delivery.conf" />
+    </ItemGroup>
+
+</Project>

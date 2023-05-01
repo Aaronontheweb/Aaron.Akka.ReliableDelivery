@@ -28,7 +28,7 @@ public static class ProducerController
 
     public static Props Create<T>(IActorRefFactory actorRefFactory, string producerId,
         Option<Props> durableProducerQueue, Settings? settings = null,
-        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+        Action<ConsumerController.SequencedMessage<T>>? sendAdapter = null)
     {
         Props p;
         switch (actorRefFactory)
@@ -46,11 +46,11 @@ public static class ProducerController
 
         return p;
     }
-    
+
     internal static Props CreateWithFuzzing<T>(IActorRefFactory actorRefFactory, string producerId,
         Func<object, double> fuzzing,
         Option<Props> durableProducerQueue, Settings? settings = null,
-        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+        Action<ConsumerController.SequencedMessage<T>>? sendAdapter = null)
     {
         Props p;
         switch (actorRefFactory)
@@ -71,20 +71,24 @@ public static class ProducerController
 
     private static Props ProducerControllerProps<T>(IActorContext context, string producerId,
         Option<Props> durableProducerQueue, Settings? settings = null,
-        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null, Func<object, double>? fuzzing = null)
+        Action<ConsumerController.SequencedMessage<T>>? sendAdapter = null, Func<object, double>? fuzzing = null)
     {
-        return ProducerControllerProps(context.System, producerId, durableProducerQueue, settings, sendAdapter, fuzzing);
+        return ProducerControllerProps(context.System, producerId, durableProducerQueue, settings, sendAdapter,
+            fuzzing);
     }
 
     private static Props ProducerControllerProps<T>(ActorSystem actorSystem, string producerId,
         Option<Props> durableProducerQueue, Settings? settings = null,
-        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null, Func<object, double>? fuzzing = null)
+        Action<ConsumerController.SequencedMessage<T>>? sendAdapter = null, Func<object, double>? fuzzing = null)
     {
-        return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, settings,
-            DateTimeOffsetNowTimeProvider.Instance, sendAdapter, fuzzing));
+        if (sendAdapter == null)
+            return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, settings,
+                DateTimeOffsetNowTimeProvider.Instance, fuzzing));
+        return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, sendAdapter, settings,
+            DateTimeOffsetNowTimeProvider.Instance, fuzzing));
     }
 
-    public sealed class Settings
+    public sealed record Settings
     {
         public const int DefaultDeliveryBufferSize = 128;
 
@@ -126,51 +130,23 @@ public static class ProducerController
         ///     If set to <c>null</c>, we will not chunk large messages. Otherwise, we will chunk messages larger than this value
         ///     into [1,N] chunks of this size.
         /// </summary>
-        public int? ChunkLargeMessagesBytes { get; }
+        public int? ChunkLargeMessagesBytes { get; init; }
 
 
         /// <summary>
         /// The timeout for each request to the durable queue.
         /// </summary>
-        public TimeSpan DurableQueueRequestTimeout { get; }
+        public TimeSpan DurableQueueRequestTimeout { get; init; }
 
         /// <summary>
         /// Number of retries allowed for each request to the durable queue.
         /// </summary>
-        public int DurableQueueRetryAttempts { get; }
+        public int DurableQueueRetryAttempts { get; init; }
 
         /// <summary>
         /// Timeframe for re-delivery of the first message
         /// </summary>
-        public TimeSpan DurableQueueResendFirstInterval { get; }
-        
-        // method for immutably copying the Settings with a new value for ChunkLargeMessagesBytes
-        public Settings WithChunkLargeMessagesBytes(int? chunkLargeMessagesBytes)
-        {
-            return new Settings(DurableQueueRequestTimeout, DurableQueueRetryAttempts, DurableQueueResendFirstInterval,
-                chunkLargeMessagesBytes);
-        }
-        
-        // method for immutably copying the Settings with a new value for DurableQueueRequestTimeout
-        public Settings WithDurableQueueRequestTimeout(TimeSpan durableQueueRequestTimeout)
-        {
-            return new Settings(durableQueueRequestTimeout, DurableQueueRetryAttempts, DurableQueueResendFirstInterval,
-                ChunkLargeMessagesBytes);
-        }
-        
-        // method for immutably copying the Settings with a new value for DurableQueueRetryAttempts
-        public Settings WithDurableQueueRetryAttempts(int durableQueueRetryAttempts)
-        {
-            return new Settings(DurableQueueRequestTimeout, durableQueueRetryAttempts, DurableQueueResendFirstInterval,
-                ChunkLargeMessagesBytes);
-        }
-        
-        // method for immutably copying the Settings with a new value for DurableQueueResendFirstInterval
-        public Settings WithDurableQueueResendFirstInterval(TimeSpan durableQueueResendFirstInterval)
-        {
-            return new Settings(DurableQueueRequestTimeout, DurableQueueRetryAttempts, durableQueueResendFirstInterval,
-                ChunkLargeMessagesBytes);
-        }
+        public TimeSpan DurableQueueResendFirstInterval { get; init; }
     }
 
 
@@ -235,7 +211,7 @@ public static class ProducerController
         /// <param name="cancellationToken">Optional - a CancellationToken.
         ///
         /// Note: this token only cancels the receipt of the Ack (long) - it does not stop the message from being delivered.</param>
-        /// <returns>A task that will complete once the message has been successfully processed by the consumer.</returns>
+        /// <returns>A task that will complete once the message has been successfully persisted by the <see cref="ProducerController"/>.</returns>
         public Task<long> AskNextTo(T msg, CancellationToken cancellationToken = default)
         {
             MessageWithConfirmation<T> Wrapper(IActorRef r)
@@ -243,7 +219,7 @@ public static class ProducerController
                 return new MessageWithConfirmation<T>(msg, r);
             }
 
-            return SendNextTo.Ask<long>(Wrapper, cancellationToken:cancellationToken);
+            return SendNextTo.Ask<long>(Wrapper, cancellationToken: cancellationToken, timeout: null);
         }
 
         /// <summary>

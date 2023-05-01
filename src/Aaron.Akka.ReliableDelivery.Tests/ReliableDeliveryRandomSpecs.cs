@@ -47,7 +47,7 @@ public class ReliableDeliveryRandomSpecs : TestKit
     private async Task Test(int numberOfMessages, double producerDropProbability, double consumerDropProbability,
         Option<double> durableFailProbability, bool resendLost)
     {
-        var consumerControllerSettings = ConsumerController.Settings.Create(Sys).WithOnlyFlowControl(!resendLost);
+        var consumerControllerSettings = ConsumerController.Settings.Create(Sys) with { OnlyFlowControl = !resendLost };
         var consumerDelay = ThreadLocalRandom.Current.Next(40).Milliseconds();
         var producerDelay = ThreadLocalRandom.Current.Next(40).Milliseconds();
         var durableDelay = durableFailProbability.HasValue

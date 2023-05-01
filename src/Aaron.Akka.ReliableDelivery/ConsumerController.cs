@@ -237,7 +237,7 @@ public static class ConsumerController
     /// <summary>
     /// ConsumerController settings.
     /// </summary>
-    public sealed class Settings
+    public sealed record Settings
     {
         public static Settings Create(ActorSystem actorSystem)
         {
@@ -259,36 +259,17 @@ public static class ConsumerController
             OnlyFlowControl = onlyFlowControl;
         }
 
-        public int FlowControlWindow { get; }
+        public int FlowControlWindow { get; init; }
 
-        public TimeSpan ResendIntervalMin { get; }
+        public TimeSpan ResendIntervalMin { get; init; }
 
-        public TimeSpan ResendIntervalMax { get; }
+        public TimeSpan ResendIntervalMax { get; init; }
 
-        public bool OnlyFlowControl { get; }
-        
-        // add method to copy with new FlowControlWindow
-        public Settings WithFlowControlWindow(int flowControlWindow)
+        public bool OnlyFlowControl { get; init; }
+
+        public override string ToString()
         {
-            return new Settings(flowControlWindow, ResendIntervalMin, ResendIntervalMax, OnlyFlowControl);
-        }
-        
-        // add method to copy with new ResendIntervalMin
-        public Settings WithResendIntervalMin(TimeSpan resendIntervalMin)
-        {
-            return new Settings(FlowControlWindow, resendIntervalMin, ResendIntervalMax, OnlyFlowControl);
-        }
-        
-        // add method to copy with new ResendIntervalMax
-        public Settings WithResendIntervalMax(TimeSpan resendIntervalMax)
-        {
-            return new Settings(FlowControlWindow, ResendIntervalMin, resendIntervalMax, OnlyFlowControl);
-        }
-        
-        // add method to copy with new OnlyFlowControl
-        public Settings WithOnlyFlowControl(bool onlyFlowControl)
-        {
-            return new Settings(FlowControlWindow, ResendIntervalMin, ResendIntervalMax, onlyFlowControl);
+            return $"ConsumerController.Settings({FlowControlWindow}, {ResendIntervalMin}, {ResendIntervalMax}, {OnlyFlowControl})";
         }
     }
 }
