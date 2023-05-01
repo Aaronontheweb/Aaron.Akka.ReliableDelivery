@@ -28,7 +28,7 @@ public static class ProducerController
 
     public static Props Create<T>(IActorRefFactory actorRefFactory, string producerId,
         Option<Props> durableProducerQueue, Settings? settings = null,
-        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+        Action<ConsumerController.SequencedMessage<T>>? sendAdapter = null)
     {
         Props p;
         switch (actorRefFactory)
@@ -46,11 +46,11 @@ public static class ProducerController
 
         return p;
     }
-    
+
     internal static Props CreateWithFuzzing<T>(IActorRefFactory actorRefFactory, string producerId,
         Func<object, double> fuzzing,
         Option<Props> durableProducerQueue, Settings? settings = null,
-        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null)
+        Action<ConsumerController.SequencedMessage<T>>? sendAdapter = null)
     {
         Props p;
         switch (actorRefFactory)
@@ -71,17 +71,21 @@ public static class ProducerController
 
     private static Props ProducerControllerProps<T>(IActorContext context, string producerId,
         Option<Props> durableProducerQueue, Settings? settings = null,
-        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null, Func<object, double>? fuzzing = null)
+        Action<ConsumerController.SequencedMessage<T>>? sendAdapter = null, Func<object, double>? fuzzing = null)
     {
-        return ProducerControllerProps(context.System, producerId, durableProducerQueue, settings, sendAdapter, fuzzing);
+        return ProducerControllerProps(context.System, producerId, durableProducerQueue, settings, sendAdapter,
+            fuzzing);
     }
 
     private static Props ProducerControllerProps<T>(ActorSystem actorSystem, string producerId,
         Option<Props> durableProducerQueue, Settings? settings = null,
-        Func<ConsumerController.SequencedMessage<T>, object>? sendAdapter = null, Func<object, double>? fuzzing = null)
+        Action<ConsumerController.SequencedMessage<T>>? sendAdapter = null, Func<object, double>? fuzzing = null)
     {
-        return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, settings,
-            DateTimeOffsetNowTimeProvider.Instance, sendAdapter, fuzzing));
+        if (sendAdapter == null)
+            return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, settings,
+                DateTimeOffsetNowTimeProvider.Instance, fuzzing));
+        return Props.Create(() => new ProducerController<T>(producerId, durableProducerQueue, sendAdapter, settings,
+            DateTimeOffsetNowTimeProvider.Instance, fuzzing));
     }
 
     public sealed record Settings
@@ -215,7 +219,7 @@ public static class ProducerController
                 return new MessageWithConfirmation<T>(msg, r);
             }
 
-            return SendNextTo.Ask<long>(Wrapper, cancellationToken:cancellationToken, timeout:null);
+            return SendNextTo.Ask<long>(Wrapper, cancellationToken: cancellationToken, timeout: null);
         }
 
         /// <summary>

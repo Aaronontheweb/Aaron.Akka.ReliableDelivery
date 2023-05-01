@@ -16,6 +16,7 @@ using Akka.IO;
 using Akka.Pattern;
 using Akka.Serialization;
 using Akka.Util;
+using Akka.Util.Extensions;
 using static Aaron.Akka.ReliableDelivery.ProducerController;
 using static Aaron.Akka.ReliableDelivery.ConsumerController;
 
@@ -38,23 +39,25 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
     /// Used only for testing to simulate network failures.
     /// </summary>
     private readonly Func<object, double>? _fuzzingControl;
-
-    private readonly Func<SequencedMessage<T>, object> _sendAdapter;
+    
     private readonly Lazy<Serialization> _serialization = new(() => Context.System.Serialization);
     private readonly CancellationTokenSource _shutdownCancellation = new();
     private readonly Option<Props> _durableProducerQueueProps;
     private readonly ITimeProvider _timeProvider;
-
+    
+    /// <summary>
+    /// Uses a custom send function. Used with the ShardingProducerController so the messages can be wrapped inside
+    /// a ShardEnvelope before being delivered to the shard region.
+    /// </summary>
     public ProducerController(string producerId,
-        Option<Props> durableProducerQueue, ProducerController.Settings? settings = null,
+        Option<Props> durableProducerQueue, Action<SequencedMessage<T>> sendAdapter, ProducerController.Settings? settings = null,
         ITimeProvider? timeProvider = null,
-        Func<SequencedMessage<T>, object>? sendAdapter = null, Func<object, double>? fuzzingControl = null)
+        Func<object, double>? fuzzingControl = null)
     {
         ProducerId = producerId;
         Settings = settings ?? ProducerController.Settings.Create(Context.System);
         _durableProducerQueueProps = durableProducerQueue;
         _timeProvider = timeProvider ?? DateTimeOffsetNowTimeProvider.Instance;
-        _sendAdapter = sendAdapter ?? DefaultSend;
         _fuzzingControl = fuzzingControl;
 
         // this state gets overridden during the loading sequence, so it's not used at all really
@@ -62,7 +65,36 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             ActorRefs.NoSender, ImmutableList<SequencedMessage<T>>.Empty,
             ImmutableDictionary<long, IActorRef>.Empty, _ => { }, 0);
 
-        WaitingForActivation();
+        // not going to use the ConsumerController here due to custom send adapter
+        WaitingForActivation(Context.System.DeadLetters.AsOption(), state =>
+        {
+            state = state with
+            {
+                // use the custom send adapter
+                Send = sendAdapter
+            };
+
+            BecomeActive(state);
+        });
+    }
+
+    public ProducerController(string producerId,
+        Option<Props> durableProducerQueue, ProducerController.Settings? settings = null,
+        ITimeProvider? timeProvider = null,
+        Func<object, double>? fuzzingControl = null)
+    {
+        ProducerId = producerId;
+        Settings = settings ?? ProducerController.Settings.Create(Context.System);
+        _durableProducerQueueProps = durableProducerQueue;
+        _timeProvider = timeProvider ?? DateTimeOffsetNowTimeProvider.Instance;
+        _fuzzingControl = fuzzingControl;
+
+        // this state gets overridden during the loading sequence, so it's not used at all really
+        CurrentState = new State(false, 0, 0, 0, true, 0, ImmutableList<SequencedMessage<T>>.Empty,
+            ActorRefs.NoSender, ImmutableList<SequencedMessage<T>>.Empty,
+            ImmutableDictionary<long, IActorRef>.Empty, _ => { }, 0);
+
+        WaitingForActivation(Option<IActorRef>.None, BecomeActive);
     }
 
     protected override bool AroundReceive(Receive receive, object message)
@@ -172,13 +204,12 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     #region Behaviors
 
-    private void WaitingForActivation()
+    private void WaitingForActivation(Option<IActorRef> consumerController, Action<State> becomeActive)
     {
         var initialState = CreateInitialState(_durableProducerQueueProps.HasValue);
-        var consumerController = ActorRefs.NoSender;
 
         bool IsReadyForActivation() =>
-            !CurrentState.Producer.IsNobody() && !consumerController.IsNobody() && initialState.HasValue;
+            !CurrentState.Producer.IsNobody() && consumerController.HasValue && initialState.HasValue;
 
         Receive<ProducerController.Start<T>>(start =>
         {
@@ -186,22 +217,22 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
             CurrentState = CurrentState with { Producer = start.Producer };
 
             if (IsReadyForActivation())
-                BecomeActive(CreateState(start.Producer, consumerController, initialState.Value));
+                becomeActive(CreateState(start.Producer, consumerController, initialState.Value));
         });
 
         Receive<RegisterConsumer<T>>(consumer =>
         {
-            consumerController = consumer.ConsumerController;
+            consumerController = consumer.ConsumerController.AsOption();
 
             if (IsReadyForActivation())
-                BecomeActive(CreateState(CurrentState.Producer!, consumerController, initialState.Value));
+                becomeActive(CreateState(CurrentState.Producer!, consumerController, initialState.Value));
         });
 
         Receive<LoadStateReply<T>>(reply =>
         {
             initialState = reply.State;
             if (IsReadyForActivation())
-                BecomeActive(CreateState(CurrentState.Producer!, consumerController, initialState.Value));
+                becomeActive(CreateState(CurrentState.Producer!, consumerController, initialState.Value));
         });
 
         Receive<LoadStateFailed>(failed =>
@@ -572,7 +603,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
         return Option<DurableProducerQueue.State<T>>.Create(DurableProducerQueue.State<T>.Empty);
     }
 
-    private State CreateState(IActorRef producer, IActorRef consumerController,
+    private State CreateState(IActorRef producer, Option<IActorRef> consumerController,
         DurableProducerQueue.State<T> loadedState)
     {
         var unconfirmedBuilder = ImmutableList.CreateBuilder<SequencedMessage<T>>();
@@ -583,10 +614,10 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
                 new SequencedMessage<T>(ProducerId, u.SeqNr, u.Message, i == 0, u.Ack, Self));
             i++;
         }
-
+        
         void Send(SequencedMessage<T> msg)
         {
-            consumerController.Tell(msg);
+            consumerController.Value.Tell(msg);
         }
 
         return new State(false, loadedState.CurrentSeqNr, loadedState.HighestConfirmedSeqNr, 1L, true,
