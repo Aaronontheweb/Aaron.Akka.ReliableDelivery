@@ -273,15 +273,146 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
                         break;
                 }
             }
-            
+
             DurableQueueRef.OnSuccess(d =>
             {
                 // Storing the confirmedSeqNr can be "write behind", at-least-once delivery
-                d.Tell(new DurableProducerQueue.StoreMessageConfirmed<T>(confirmed.Last().TotalSeqNr, outState.EntityId, _timeProvider.Now.Ticks));
+                d.Tell(new DurableProducerQueue.StoreMessageConfirmed<T>(confirmed.Last().TotalSeqNr, outState.EntityId,
+                    _timeProvider.Now.Ticks));
             });
         }
 
         return newUnconfirmed;
+    }
+
+
+    private void ReceiveStoreMessageSentCompleted(long seqNr, T msg, string entityId)
+    {
+        if (CurrentState.ReplyAfterStore.TryGetValue(seqNr, out var replyTo))
+        {
+            _log.Info("Confirmation reply to [{0}] after storage", seqNr);
+            replyTo.Tell(Done.Instance);
+        }
+
+        var newReplyAfterStore = CurrentState.ReplyAfterStore.Remove(seqNr);
+        
+        OnMsg(entityId, msg, Option<IActorRef>.None, seqNr, newReplyAfterStore);
+    }
+    
+    private void ReceiveStoreMessageSentFailure(StoreMessageSentFailed<T> f)
+    {
+        if (f.Attempt >= Settings.ProducerControllerSettings.DurableQueueRetryAttempts)
+        {
+            var errorMessage = $"StoreMessageSentFailed seqNr [{f.MessageSent.SeqNr}] failed after [{f.Attempt}] attempts, giving up.";
+            _log.Error(errorMessage);
+            throw new TimeoutException(errorMessage);
+        }
+        else
+        {
+            _log.Info("StoreMessageSent seqNr [{0}] failed, attempt [{1}], retrying", f.MessageSent.SeqNr, f.Attempt);
+            // retry
+            StoreMessageSent(f.MessageSent, f.Attempt + 1);
+        }
+    }
+
+    private void ReceiveAck(Ack ack)
+    {
+        if (CurrentState.OutStates.TryGetValue(ack.OutKey, out var outState))
+        {
+            // TODO: support tracing loglevel
+            if(_log.IsDebugEnabled)
+                _log.Debug("Received Ack, confirmed [{0}], current [{1}]", ack.ConfirmedSeqNr, CurrentState.CurrentSeqNr);
+            var newUnconfirmed = OnAck(outState, ack.ConfirmedSeqNr);
+            var newUsedTime = newUnconfirmed.Count != outState.Unconfirmed.Count ? _timeProvider.Now.Ticks : outState.LastUsed;
+            
+            var newOutState = outState with
+            {
+                Unconfirmed = newUnconfirmed,
+                LastUsed = newUsedTime
+            };
+            
+            CurrentState = CurrentState with
+            {
+                OutStates = CurrentState.OutStates.SetItem(ack.OutKey, newOutState)
+            };
+        }
+        else
+        {
+            // obsolete Ack, ConsumerController already deregistered
+            Unhandled(ack);
+        }
+    }
+
+    private void ReceiveWrappedRequestNext(WrappedRequestNext<T> w)
+    {
+        var next = w.RequestNext;
+        var outKey = next.ProducerId;
+        if (CurrentState.OutStates.TryGetValue(outKey, out var outState))
+        {
+            if(outState.NextTo.HasValue)
+                throw new IllegalStateException($"Received RequestNext but already has demand for [{outKey}]");
+
+            var confirmedSeqNr = w.RequestNext.ConfirmedSeqNr;
+            // TODO: support tracing loglevel
+            if(_log.IsDebugEnabled)
+                _log.Debug("Received RequestNext from [{0}], confirmed seqNr [{1}]", outState.EntityId, confirmedSeqNr);
+            
+            var newUnconfirmed = OnAck(outState, confirmedSeqNr);
+            if (outState.Buffered.Any())
+            {
+                var buf = outState.Buffered.First();
+                Send(buf.Msg, outKey, outState.SeqNr, next.SendNextTo);
+                var newUnconfirmed2 =
+                    newUnconfirmed.Add(new Unconfirmed<T>(buf.TotalSeqNr, outState.SeqNr, buf.ReplyTo));
+                var newProducers = CurrentState.OutStates.SetItem(outKey,
+                    outState with
+                    {
+                        Buffered = outState.Buffered.RemoveAt(0),
+                        SeqNr = outState.SeqNr + 1,
+                        Unconfirmed = newUnconfirmed2,
+                        LastUsed = _timeProvider.Now.Ticks,
+                        NextTo = Option<IActorRef>.None
+                    });
+                
+                CurrentState = CurrentState with {OutStates = newProducers};
+            }
+            else
+            {
+                var newProducers = CurrentState.OutStates.SetItem(outKey,
+                    outState with
+                    {
+                        Unconfirmed = newUnconfirmed,
+                        LastUsed = _timeProvider.Now.Ticks,
+                        NextTo = next.SendNextTo.AsOption()
+                    });
+                var newState = CurrentState with {OutStates = newProducers};
+                
+                // send an updated RequestNext
+                CurrentState.Producer.Tell(CreateRequestNext(newState));
+                CurrentState = newState;
+            }
+        }
+        else
+        {
+            // if ProducerController was stopped and there was a RequestNext in flight, but will not happen in practice
+            _log.Warning("Received RequestNext for unknown [{0}]", outKey);
+        }
+    }
+
+    private void ReceiveStart(Start<T> start)
+    {
+        ProducerController.AssertLocalProducer(start.Producer);
+        _log.Debug("Register new Producer [{0}], currentSeqNr [{1}].", start.Producer, CurrentState.CurrentSeqNr);
+        start.Producer.Tell(CreateRequestNext(CurrentState));
+        CurrentState = CurrentState with
+        {
+            Producer = start.Producer
+        };
+    }
+
+    private void StoreMessageSent(DurableProducerQueue.MessageSent<T> fMessageSent, int attempt)
+    {
+        throw new NotImplementedException();
     }
 
     private RequestNext<T> CreateRequestNext(State<T> state)

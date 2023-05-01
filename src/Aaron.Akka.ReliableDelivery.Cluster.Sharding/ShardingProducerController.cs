@@ -180,7 +180,7 @@ public static class ShardingProducerController
         }
     }
 
-    internal sealed record Ack(string OutKey, long OutSeqNr);
+    internal sealed record Ack(string OutKey, long ConfirmedSeqNr);
 
     internal sealed record AskTimeout(string OutKey, long OutSeqNr);
 
@@ -205,7 +205,7 @@ public static class ShardingProducerController
 
     internal sealed record StoreMessageSentReply(DurableProducerQueue.StoreMessageSentAck Ack);
 
-    internal sealed record StoreMessageSentFailed<T>(DurableProducerQueue.StoreMessageSent<T> MessageSent,
+    internal sealed record StoreMessageSentFailed<T>(DurableProducerQueue.MessageSent<T> MessageSent,
         int Attempt);
 
     internal sealed record StoreMessageSentCompleted<T>(DurableProducerQueue.MessageSent<T> MessageSent);
