@@ -51,21 +51,8 @@ public static class ShardingProducerController
         public IActorRef Producer { get; }
     }
 
-    public sealed record MessageWithConfirmation<T> : IShardingProducerControllerCommand<T>
-    {
-        public MessageWithConfirmation(string entityId, T message, IActorRef replyTo)
-        {
-            Message = message;
-            ReplyTo = replyTo;
-            EntityId = entityId;
-        }
-
-        public EntityId EntityId { get; init; }
-
-        public T Message { get; init; }
-
-        public IActorRef ReplyTo { get; init; }
-    }
+    public sealed record MessageWithConfirmation<T>
+        (EntityId EntityId, T Message, IActorRef ReplyTo) : IShardingProducerControllerCommand<T>;
 
     /// <summary>
     /// The <see cref="ProducerController"/> sends <see cref="RequestNext{T}"/> to the producer when it is allowed to send

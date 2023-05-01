@@ -133,7 +133,7 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
     {
         Timers.StartPeriodicTimer(CleanupUnused.Instance, CleanupUnused.Instance,
             TimeSpan.FromMilliseconds(Settings.CleanupUnusedAfter.TotalMilliseconds / 2));
-        Timers.StartPeriodicTimer(ResendFirstUnconfirmed.Instance, ResendFirstUnconfirmed.Instance,
+        Timers.StartPeriodicTimer(ShardingProducerController.ResendFirstUnconfirmed.Instance, ShardingProducerController.ResendFirstUnconfirmed.Instance,
             TimeSpan.FromMilliseconds(Settings.ResendFirstUnconfirmedIdleTimeout.TotalMilliseconds / 2));
 
         // resend unconfirmed before other stashed messages
@@ -174,6 +174,84 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
 
     private void Active()
     {
+        Receive<Msg>(msg =>
+        {
+            if (DurableQueueRef.IsEmpty)
+            {
+                // currentSeqNr is only updated when DurableQueue is available
+                OnMsg(msg.Envelope.EntityId, (T)msg.Envelope.Message, Option<IActorRef>.None, CurrentState.CurrentSeqNr,
+                    CurrentState.ReplyAfterStore);
+            }
+            else if (msg.IsAlreadyStored)
+            {
+                // loaded from durable queue, currentSeqNr has already been stored previously
+                OnMsg(msg.Envelope.EntityId, (T)msg.Envelope.Message, Option<IActorRef>.None, msg.AlreadyStored,
+                    CurrentState.ReplyAfterStore);
+            }
+            else
+            {
+                StoreMessageSent(
+                    new DurableProducerQueue.MessageSent<T>(CurrentState.CurrentSeqNr, (T)msg.Envelope.Message, false,
+                        msg.Envelope.EntityId, _timeProvider.Now.Ticks), attempt: 1);
+                
+                CurrentState = CurrentState with { CurrentSeqNr = CurrentState.CurrentSeqNr + 1 };
+            }
+        });
+
+        Receive<MessageWithConfirmation<T>>(messageWithConfirmation =>
+        {
+            var (entityId, message, replyTo) = messageWithConfirmation;
+            
+            if (DurableQueueRef.IsEmpty)
+            {
+                OnMsg(entityId, message, replyTo.AsOption(), CurrentState.CurrentSeqNr, CurrentState.ReplyAfterStore);
+            }
+            else
+            {
+                StoreMessageSent(new DurableProducerQueue.MessageSent<T>(CurrentState.CurrentSeqNr, message, true,
+                    entityId, _timeProvider.Now.Ticks), attempt: 1);
+                var newReplyAfterStore = CurrentState.ReplyAfterStore.SetItem(CurrentState.CurrentSeqNr, replyTo);
+                CurrentState = CurrentState with
+                {
+                    CurrentSeqNr = CurrentState.CurrentSeqNr + 1,
+                    ReplyAfterStore = newReplyAfterStore
+                };
+            }
+        });
+
+        Receive<StoreMessageSentCompleted<T>>(completed =>
+        {
+            var (seqNr, msg, _, entityId, _) = completed.MessageSent;
+            ReceiveStoreMessageSentCompleted(seqNr, msg, entityId);
+        });
+
+        Receive<StoreMessageSentFailed<T>>(ReceiveStoreMessageSentFailed);
+
+        Receive<Ack>(ReceiveAck);
+
+        Receive<WrappedRequestNext<T>>(ReceiveWrappedRequestNext);
+        
+        Receive<ShardingProducerController.ResendFirstUnconfirmed>(_ => ResendFirstUnconfirmed());
+        
+        Receive<CleanupUnused>(_ => ReceiveCleanupUnused());
+
+        Receive<Start<T>>(ReceiveStart);
+
+        Receive<AskTimeout>(t =>
+        {
+            var (outKey, outSeqNr) = t;
+            _log.Debug("Message seqNr [{0}] sent to entity [{1}] timed out. It will be redelivered.", outSeqNr, outKey);
+        });
+
+        Receive<DurableQueueTerminated>(_ =>
+        {
+            throw new IllegalStateException("DurableQueue was unexpectedly terminated.");
+        });
+        
+        ReceiveAny(_ =>
+        {
+            throw new InvalidOperationException($"Unexpected message [{_}] in Active state.");
+        });
     }
 
     #endregion
@@ -295,15 +373,16 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
         }
 
         var newReplyAfterStore = CurrentState.ReplyAfterStore.Remove(seqNr);
-        
+
         OnMsg(entityId, msg, Option<IActorRef>.None, seqNr, newReplyAfterStore);
     }
-    
-    private void ReceiveStoreMessageSentFailure(StoreMessageSentFailed<T> f)
+
+    private void ReceiveStoreMessageSentFailed(StoreMessageSentFailed<T> f)
     {
         if (f.Attempt >= Settings.ProducerControllerSettings.DurableQueueRetryAttempts)
         {
-            var errorMessage = $"StoreMessageSentFailed seqNr [{f.MessageSent.SeqNr}] failed after [{f.Attempt}] attempts, giving up.";
+            var errorMessage =
+                $"StoreMessageSentFailed seqNr [{f.MessageSent.SeqNr}] failed after [{f.Attempt}] attempts, giving up.";
             _log.Error(errorMessage);
             throw new TimeoutException(errorMessage);
         }
@@ -320,17 +399,20 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
         if (CurrentState.OutStates.TryGetValue(ack.OutKey, out var outState))
         {
             // TODO: support tracing loglevel
-            if(_log.IsDebugEnabled)
-                _log.Debug("Received Ack, confirmed [{0}], current [{1}]", ack.ConfirmedSeqNr, CurrentState.CurrentSeqNr);
+            if (_log.IsDebugEnabled)
+                _log.Debug("Received Ack, confirmed [{0}], current [{1}]", ack.ConfirmedSeqNr,
+                    CurrentState.CurrentSeqNr);
             var newUnconfirmed = OnAck(outState, ack.ConfirmedSeqNr);
-            var newUsedTime = newUnconfirmed.Count != outState.Unconfirmed.Count ? _timeProvider.Now.Ticks : outState.LastUsed;
-            
+            var newUsedTime = newUnconfirmed.Count != outState.Unconfirmed.Count
+                ? _timeProvider.Now.Ticks
+                : outState.LastUsed;
+
             var newOutState = outState with
             {
                 Unconfirmed = newUnconfirmed,
                 LastUsed = newUsedTime
             };
-            
+
             CurrentState = CurrentState with
             {
                 OutStates = CurrentState.OutStates.SetItem(ack.OutKey, newOutState)
@@ -349,14 +431,14 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
         var outKey = next.ProducerId;
         if (CurrentState.OutStates.TryGetValue(outKey, out var outState))
         {
-            if(outState.NextTo.HasValue)
+            if (outState.NextTo.HasValue)
                 throw new IllegalStateException($"Received RequestNext but already has demand for [{outKey}]");
 
             var confirmedSeqNr = w.RequestNext.ConfirmedSeqNr;
             // TODO: support tracing loglevel
-            if(_log.IsDebugEnabled)
+            if (_log.IsDebugEnabled)
                 _log.Debug("Received RequestNext from [{0}], confirmed seqNr [{1}]", outState.EntityId, confirmedSeqNr);
-            
+
             var newUnconfirmed = OnAck(outState, confirmedSeqNr);
             if (outState.Buffered.Any())
             {
@@ -373,8 +455,8 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
                         LastUsed = _timeProvider.Now.Ticks,
                         NextTo = Option<IActorRef>.None
                     });
-                
-                CurrentState = CurrentState with {OutStates = newProducers};
+
+                CurrentState = CurrentState with { OutStates = newProducers };
             }
             else
             {
@@ -385,8 +467,8 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
                         LastUsed = _timeProvider.Now.Ticks,
                         NextTo = next.SendNextTo.AsOption()
                     });
-                var newState = CurrentState with {OutStates = newProducers};
-                
+                var newState = CurrentState with { OutStates = newProducers };
+
                 // send an updated RequestNext
                 CurrentState.Producer.Tell(CreateRequestNext(newState));
                 CurrentState = newState;
@@ -410,9 +492,63 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
         };
     }
 
-    private void StoreMessageSent(DurableProducerQueue.MessageSent<T> fMessageSent, int attempt)
+    private void ResendFirstUnconfirmed()
     {
-        throw new NotImplementedException();
+        var now = _timeProvider.Now.Ticks;
+        foreach (var (outKey, outState) in CurrentState.OutStates)
+        {
+            var idleDurationMs = (now - outState.LastUsed) / TimeSpan.TicksPerMillisecond;
+            if (outState.Unconfirmed.Any() &&
+                idleDurationMs >= Settings.ResendFirstUnconfirmedIdleTimeout.TotalMilliseconds)
+            {
+                _log.Debug("Resend first unconfirmed for [{0}], because it was idle for [{1}] ms", outKey,
+                    idleDurationMs);
+                outState.ProducerController.Tell(ProducerController.ResendFirstUnconfirmed.Instance);
+            }
+        }
+    }
+
+    private void ReceiveCleanupUnused()
+    {
+        var now = _timeProvider.Now.Ticks;
+        var removeOutKeys = CurrentState.OutStates.Select(c =>
+        {
+            var outKey = c.Key;
+            var outState = c.Value;
+            var idleDurationMs = (now - outState.LastUsed) / TimeSpan.TicksPerMillisecond;
+            if (outState.Unconfirmed.IsEmpty && outState.Buffered.IsEmpty &&
+                idleDurationMs >= Settings.CleanupUnusedAfter.TotalMilliseconds)
+            {
+                _log.Debug("Cleanup unused [{0}], because it was idle for [{1}] ms", outKey, idleDurationMs);
+                Context.Stop(outState.ProducerController);
+                return outKey.AsOption();
+            }
+            else
+            {
+                return Option<string>.None;
+            }
+        }).Where(c => c.HasValue).Select(c => c.Value).ToImmutableList();
+
+        if (removeOutKeys.Any())
+        {
+            CurrentState = CurrentState with
+            {
+                OutStates = CurrentState.OutStates.RemoveRange(removeOutKeys)
+            };
+        }
+    }
+
+    private void StoreMessageSent(DurableProducerQueue.MessageSent<T> messageSent, int attempt)
+    {
+        var askTimeout = Settings.ProducerControllerSettings.DurableQueueRequestTimeout;
+        DurableProducerQueue.StoreMessageSent<T> Mapper(IActorRef r) => new(messageSent, r);
+
+        var self = Self;
+        
+        DurableQueueRef.Value.Ask<DurableProducerQueue.StoreMessageSentAck>(Mapper,
+                askTimeout, cancellationToken: default)
+            .PipeTo(self, success: ack => new StoreMessageSentCompleted<T>(messageSent),
+                failure: ex => new StoreMessageSentFailed<T>(messageSent, attempt));
     }
 
     private RequestNext<T> CreateRequestNext(State<T> state)

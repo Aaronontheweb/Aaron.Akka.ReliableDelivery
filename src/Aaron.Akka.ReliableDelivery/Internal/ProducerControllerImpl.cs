@@ -912,8 +912,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private void StoreMessageSent(DurableProducerQueue.MessageSent<T> messageSent, int attempt)
     {
-        DurableProducerQueue.StoreMessageSent<T> Mapper(IActorRef r) =>
-            new DurableProducerQueue.StoreMessageSent<T>(messageSent, r);
+        DurableProducerQueue.StoreMessageSent<T> Mapper(IActorRef r) => new(messageSent, r);
 
         var self = Self;
         DurableProducerQueueRef.Value.Ask<DurableProducerQueue.StoreMessageSentAck>(Mapper,
