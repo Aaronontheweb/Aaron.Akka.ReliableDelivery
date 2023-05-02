@@ -8,7 +8,7 @@
     <PackageVersion Include="Akka.Cluster.Sharding" Version="1.5.4" />
     <PackageVersion Include="Akka.TestKit.Xunit2" Version="1.5.4" />
     <PackageVersion Include="FluentAssertions" Version="6.11.0" />
-    <PackageVersion Include="Polyfill" Version="1.18.0" />
+    <PackageVersion Include="Polyfill" Version="1.21.0" />
   </ItemGroup>
   <!-- Test dependencies -->
   <ItemGroup>
