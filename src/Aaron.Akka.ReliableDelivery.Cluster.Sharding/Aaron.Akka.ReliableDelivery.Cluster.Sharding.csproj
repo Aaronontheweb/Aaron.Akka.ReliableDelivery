@@ -12,10 +12,18 @@
 
     <ItemGroup>
       <PackageReference Include="Akka.Cluster.Sharding" />
+      <PackageReference Include="Grpc.Tools">
+        <PrivateAssets>all</PrivateAssets>
+        <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      </PackageReference>
     </ItemGroup>
 
     <ItemGroup>
-      <None Remove="delivery.conf" />
+        <Protobuf Include="Serialization\Proto\ReliableDelivery.proto" GrpcServices="None" />
+        <Protobuf Include="Serialization\Proto\ContainerFormats.proto" GrpcServices="None" />
+    </ItemGroup>
+
+    <ItemGroup>
       <Resource Include="delivery.conf" />
     </ItemGroup>
 
