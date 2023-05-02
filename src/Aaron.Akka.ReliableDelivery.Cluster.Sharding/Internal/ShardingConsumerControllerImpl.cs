@@ -19,14 +19,14 @@ namespace Aaron.Akka.ReliableDelivery.Cluster.Sharding.Internal;
 /// <typeparam name="T">The types of messages handled by the ConsumerController</typeparam>
 internal class ShardingConsumerController<T> : ReceiveActor, IWithStash
 {
-    public ShardingConsumerController(Props consumerProps, ShardingConsumerController.Settings settings)
+    public ShardingConsumerController(Func<IActorRef, Props> consumerProps, ShardingConsumerController.Settings settings)
     {
         ConsumerProps = consumerProps;
         Settings = settings;
         WaitForStart();
     }
 
-    public Props ConsumerProps { get; }
+    public Func<IActorRef, Props> ConsumerProps { get; }
     public ShardingConsumerController.Settings Settings { get; }
 
     private readonly ILoggingAdapter _log = Context.GetLogger();
@@ -142,7 +142,8 @@ internal class ShardingConsumerController<T> : ReceiveActor, IWithStash
 
     protected override void PreStart()
     {
-        _consumer = Context.ActorOf(ConsumerProps, "consumer");
+        var self = Self;
+        _consumer = Context.ActorOf(ConsumerProps(self), "consumer");
         Context.Watch(_consumer);
     }
 
