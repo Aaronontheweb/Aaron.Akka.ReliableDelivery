@@ -19,6 +19,7 @@ namespace Sharding.Tests;
 public class ReliableDeliveryShardingSpec : TestKit
 {
     public static Config Configuration = @"
+        akka.loglevel = DEBUG
         akka.actor.provider = cluster
         akka.remote.dot-netty.tcp.port = 0
         akka.reliable-delivery.consumer-controller.flow-control-window = 20

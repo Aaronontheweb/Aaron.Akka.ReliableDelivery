@@ -9,7 +9,6 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
-using Aaron.Akka.ReliableDelivery.Internal;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Event;
@@ -70,7 +69,7 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
             if (cleanProcessed.Contains(nextMsg))
                 throw new InvalidOperationException($"Received duplicate [{nextMsg}]");
 
-            _log.Info("processed [{0}] from [{1}]", job.SeqNr, job.ProducerId);
+            _log.Info("processed [{0}] [msg: {1}] from [{2}]", job.SeqNr, job.Msg.Payload, job.ProducerId);
             job.ConfirmTo.Tell(Akka.ReliableDelivery.ConsumerController.Confirmed.Instance);
 
             if (EndCondition(job))
@@ -95,7 +94,7 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
         else
         {
             // schedule to simulate slower consumer
-            Timers.StartSingleTimer("job",
+            Timers.StartSingleTimer(delivery, // have to use a unique-per-message key here, otherwise messages from multiple producers will cancel each other
                 new SomeAsyncJob(delivery.Msg, delivery.ConfirmTo, delivery.ProducerId, delivery.SeqNr),
                 TimeSpan.FromMilliseconds(10));
         }
@@ -131,27 +130,18 @@ public sealed class TestConsumer : ReceiveActor, IWithTimers
         {
             return Payload.GetHashCode();
         }
+        
+        public override string ToString()
+        {
+            return $"Job({Payload})";
+        }
     }
 
     public interface ICommand
     {
     }
 
-    public sealed class JobDelivery : ICommand
-    {
-        public JobDelivery(Job msg, IActorRef confirmTo, string producerId, long seqNr)
-        {
-            Msg = msg;
-            ConfirmTo = confirmTo;
-            ProducerId = producerId;
-            SeqNr = seqNr;
-        }
-
-        public Job Msg { get; }
-        public IActorRef ConfirmTo { get; }
-        public string ProducerId { get; }
-        public long SeqNr { get; }
-    }
+    public sealed record JobDelivery(Job Msg, IActorRef ConfirmTo, string ProducerId, long SeqNr) : ICommand;
 
     public sealed class SomeAsyncJob : ICommand
     {

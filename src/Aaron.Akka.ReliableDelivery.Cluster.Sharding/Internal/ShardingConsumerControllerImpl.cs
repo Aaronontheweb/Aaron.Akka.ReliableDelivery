@@ -19,7 +19,8 @@ namespace Aaron.Akka.ReliableDelivery.Cluster.Sharding.Internal;
 /// <typeparam name="T">The types of messages handled by the ConsumerController</typeparam>
 internal class ShardingConsumerController<T> : ReceiveActor, IWithStash
 {
-    public ShardingConsumerController(Func<IActorRef, Props> consumerProps, ShardingConsumerController.Settings settings)
+    public ShardingConsumerController(Func<IActorRef, Props> consumerProps,
+        ShardingConsumerController.Settings settings)
     {
         ConsumerProps = consumerProps;
         Settings = settings;
@@ -30,18 +31,21 @@ internal class ShardingConsumerController<T> : ReceiveActor, IWithStash
     public ShardingConsumerController.Settings Settings { get; }
 
     private readonly ILoggingAdapter _log = Context.GetLogger();
+
     // gets started asynchronously in the PreStart method
     private IActorRef _consumer = ActorRefs.Nobody;
-    
+
     /// <summary>
     /// Map of producerControllers to producerIds
     /// </summary>
-    public ImmutableDictionary<IActorRef, string> ProducerControllers { get; private set; } = ImmutableDictionary<IActorRef, string>.Empty;
+    public ImmutableDictionary<IActorRef, string> ProducerControllers { get; private set; } =
+        ImmutableDictionary<IActorRef, string>.Empty;
 
     /// <summary>
     /// Map of producerIds to consumerControllers
     /// </summary>
-    public ImmutableDictionary<string, IActorRef> ConsumerControllers { get; private set; } = ImmutableDictionary<string, IActorRef>.Empty;
+    public ImmutableDictionary<string, IActorRef> ConsumerControllers { get; private set; } =
+        ImmutableDictionary<string, IActorRef>.Empty;
 
     private void WaitForStart()
     {
@@ -55,10 +59,7 @@ internal class ShardingConsumerController<T> : ReceiveActor, IWithStash
             Stash.UnstashAll();
         });
 
-        Receive<ConsumerController.IConsumerCommand<T>>(command =>
-        {
-            Stash.Stash();
-        });
+        Receive<ConsumerController.IConsumerCommand<T>>(command => { Stash.Stash(); });
 
         Receive<Terminated>(t =>
         {
@@ -69,30 +70,24 @@ internal class ShardingConsumerController<T> : ReceiveActor, IWithStash
 
     private void Active()
     {
-        Receive<ConsumerController.IConsumerCommand<T>>(cmd =>
+        Receive<ConsumerController.SequencedMessage<T>>(seqMsg =>
         {
-            switch (cmd)
+            if (ConsumerControllers.TryGetValue(seqMsg.ProducerId, out var consumerController))
             {
-                case ConsumerController.SequencedMessage<T> seqMsg:
-                {
-                    if (ConsumerControllers.TryGetValue(seqMsg.ProducerId, out var consumerController))
-                    {
-                        consumerController.Tell(seqMsg);
-                        ProducerControllers = UpdatedProducerControllers(seqMsg.ProducerController, seqMsg.ProducerId);
-                    }
-                    else
-                    {
-                        _log.Debug("Starting ConsumerController for producerId {0}", seqMsg.ProducerId);
-                        var cc = Context.ActorOf(ConsumerController.Create<T>(Context, seqMsg.ProducerController.AsOption(), Settings.ConsumerControllerSettings), $"consumerController-{seqMsg.ProducerId}");
-                        Context.Watch(cc);
-                        cc.Tell(new ConsumerController.Start<T>(_consumer));
-                        cc.Tell(seqMsg);
-                        ConsumerControllers = ConsumerControllers.Add(seqMsg.ProducerId, cc);
-                        ProducerControllers = UpdatedProducerControllers(seqMsg.ProducerController, seqMsg.ProducerId);
-                    }
-
-                    break;
-                }
+                consumerController.Tell(seqMsg);
+                ProducerControllers = UpdatedProducerControllers(seqMsg.ProducerController, seqMsg.ProducerId);
+            }
+            else
+            {
+                _log.Debug("Starting ConsumerController for producerId {0}", seqMsg.ProducerId);
+                var cc = Context.ActorOf(
+                    ConsumerController.Create<T>(Context, seqMsg.ProducerController.AsOption(),
+                        Settings.ConsumerControllerSettings), $"consumerController-{seqMsg.ProducerId}");
+                Context.Watch(cc);
+                cc.Tell(new ConsumerController.Start<T>(_consumer));
+                cc.Tell(seqMsg);
+                ConsumerControllers = ConsumerControllers.Add(seqMsg.ProducerId, cc);
+                ProducerControllers = UpdatedProducerControllers(seqMsg.ProducerController, seqMsg.ProducerId);
             }
         });
 
@@ -132,7 +127,8 @@ internal class ShardingConsumerController<T> : ReceiveActor, IWithStash
         });
     }
 
-    private ImmutableDictionary<IActorRef, string> UpdatedProducerControllers(IActorRef producerController, string producer)
+    private ImmutableDictionary<IActorRef, string> UpdatedProducerControllers(IActorRef producerController,
+        string producer)
     {
         if (ProducerControllers.ContainsKey(producerController))
             return ProducerControllers;
