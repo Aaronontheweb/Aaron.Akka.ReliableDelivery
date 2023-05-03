@@ -49,12 +49,14 @@ public static class ShardingConsumerController
 
         public static Settings Create(ActorSystem system)
         {
-            return Create(system.Settings.Config.GetConfig("akka.reliable-delivery.sharding.consumer-controller"));
+            // TODO: remove work-around once substitutions + overrides work properly in HOCON
+            return Create(system.Settings.Config.GetConfig("akka.reliable-delivery.sharding.consumer-controller"),
+                system.Settings.Config.GetConfig("akka.reliable-delivery.consumer-controller"));
         }
 
-        public static Settings Create(Config config)
+        internal static Settings Create(Config config, Config consumerControllerConfig) // made internal so users can't foot-gun themselves
         {
-            return new Settings(config.GetInt("buffer-size"), ConsumerController.Settings.Create(config));
+            return new Settings(config.GetInt("buffer-size"), ConsumerController.Settings.Create(config.WithFallback(consumerControllerConfig)));
         }
 
         public override string ToString()

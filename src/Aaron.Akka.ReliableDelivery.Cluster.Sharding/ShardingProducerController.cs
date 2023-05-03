@@ -157,19 +157,20 @@ public static class ShardingProducerController
         /// </summary>
         public static Settings Create(ActorSystem system)
         {
-            return Create(system.Settings.Config.GetConfig("akka.reliable-delivery.sharding.producer-controller"));
+            return Create(system.Settings.Config.GetConfig("akka.reliable-delivery.sharding.producer-controller"),
+                system.Settings.Config.GetConfig("akka.reliable-delivery.producer-controller"));
         }
 
         /// <summary>
         /// Factory method for creating from a <see cref="Config"/> corresponding to `akka.reliable-delivery.sharding.producer-controller`.
         /// </summary>
-        public static Settings Create(Config config)
+        public static Settings Create(Config config, Config producerControllerConfig)
         {
             return new Settings(bufferSize: config.GetInt("buffer-size"),
                 internalAskTimeout: config.GetTimeSpan("internal-ask-timeout"),
                 cleanupUnusedAfter: config.GetTimeSpan("cleanup-unused-after"),
                 resendFirstUnconfirmedIdleTimeout: config.GetTimeSpan("resend-first-unconfirmed-idle-timeout"),
-                producerControllerSettings: ProducerController.Settings.Create(config));
+                producerControllerSettings: ProducerController.Settings.Create(config.WithFallback(producerControllerConfig)));
         }
     }
 
