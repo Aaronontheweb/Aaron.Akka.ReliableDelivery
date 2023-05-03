@@ -334,4 +334,34 @@ public class ReliableDeliveryShardingSpec : TestKit
         next9.EntitiesWithDemand.Should().BeEquivalentTo(new[] {"entity-1", "entity-2"});
         next9.BufferedForEntitiesWithoutDemand.Should().BeEquivalentTo(ImmutableDictionary<string, int>.Empty);
     }
+
+    [Fact]
+    public async Task ReliableDelivery_with_Sharding_must_allow_restart_of_producer()
+    {
+        await JoinCluster();
+        
+        NextId();
+        var shardingProbe = CreateTestProbe();
+        var producerController =
+            Sys.ActorOf(
+                ShardingProducerController.Create<Job>(ProducerId, shardingProbe.Ref, Option<Props>.None,
+                    ShardingProducerController.Settings.Create(Sys)), $"shardingController-{_idCount}");
+        var producerProbe = CreateTestProbe();
+        producerController.Tell(new ShardingProducerController.Start<Job>(producerProbe.Ref));
+
+        (await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>()).SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-1")));
+        var seq1 = (ConsumerController.SequencedMessage<Job>)(await shardingProbe.ExpectMsgAsync<ShardingEnvelope>()).Message;
+        seq1.Message.Message.Should().BeEquivalentTo(new Job("msg-1"));
+        seq1.ProducerController.Tell(new ProducerController.Request(confirmedSeqNo:0L, requestUpToSeqNo:5L, true, false));
+        
+        (await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>()).SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-2")));
+        shardingProbe.ExpectMsg<ShardingEnvelope>().Message.As<ConsumerController.SequencedMessage<Job>>().Message.Should().BeEquivalentTo(new Job("msg-2"));
+        
+        // restart producer, new Start
+        var producerProbe2 = CreateTestProbe();
+        producerController.Tell(new ShardingProducerController.Start<Job>(producerProbe2.Ref));
+        
+        (await producerProbe2.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>()).SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-3")));
+        shardingProbe.ExpectMsg<ShardingEnvelope>().Message.As<ConsumerController.SequencedMessage<Job>>().Message.Should().BeEquivalentTo(new Job("msg-3"));
+    }
 }
