@@ -584,4 +584,72 @@ public class ReliableDeliveryShardingSpec : TestKit
         delivery5.Message.Should().BeEquivalentTo(new Job("msg-5"));
         delivery5.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
     }
+
+    [Fact]
+    public async Task
+        ReliableDelivery_with_Sharding_must_cleanup_ConsumerController_when_ProducerController_is_terminated()
+    {
+        await JoinCluster();
+
+        // for example if ShardingConsumerController is rebalanced, but no more messages are sent to the entity
+        NextId();
+
+        var consumerEndProbe = CreateTestProbe();
+        var region = await ClusterSharding.Get(Sys).StartAsync($"TestConsumer-{_idCount}", s =>
+                ShardingConsumerController.Create<Job>(c =>
+                        Props.Create(() => new ProbeWrapper(consumerEndProbe, c)),
+                    ShardingConsumerController.Settings.Create(Sys)), ClusterShardingSettings.Create(Sys),
+            HashCodeMessageExtractor.Create(10,
+                o =>
+                {
+                    if (o is ShardingEnvelope se)
+                        return se.EntityId;
+                    return string.Empty;
+                }, o =>
+                {
+                    if (o is ShardingEnvelope se)
+                        return se.Message;
+                    return o;
+                }));
+        
+        var shardingProducerController1 =
+            Sys.ActorOf(
+                ShardingProducerController.Create<Job>(ProducerId, region, Option<Props>.None,
+                    ShardingProducerController.Settings.Create(Sys)), $"shardingController-{_idCount}");
+        var producerProbe = CreateTestProbe();
+        shardingProducerController1.Tell(new ShardingProducerController.Start<Job>(producerProbe.Ref));
+        
+        (await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>()).SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-1")));
+        var delivery1 = await consumerEndProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery1.Message.Should().BeEquivalentTo(new Job("msg-1"));
+        delivery1.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        (await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>()).SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-2")));
+        var delivery2 = await consumerEndProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery2.Message.Should().BeEquivalentTo(new Job("msg-2"));
+        delivery2.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+
+        await shardingProducerController1.GracefulStop(RemainingOrDefault);
+        
+        var shardingProducerController2 =
+            Sys.ActorOf(
+                ShardingProducerController.Create<Job>(ProducerId, region, Option<Props>.None,
+                    ShardingProducerController.Settings.Create(Sys)), $"shardingController2-{_idCount}");
+        shardingProducerController2.Tell(new ShardingProducerController.Start<Job>(producerProbe.Ref));
+        
+        await EventFilter.Debug(start:"Starting ConsumerController").ExpectAsync(1, async () =>
+        {
+            (await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>()).SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-3")));
+        });
+        
+        var delivery3 = await consumerEndProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery3.Message.Should().BeEquivalentTo(new Job("msg-3"));
+        delivery3.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        (await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>()).SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-4")));
+        var delivery4 = await consumerEndProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery4.Message.Should().BeEquivalentTo(new Job("msg-4"));
+        delivery4.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+    }
 }
