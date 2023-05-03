@@ -639,7 +639,7 @@ internal sealed class ProducerController<T> : ReceiveActor, IWithTimers
 
     private void ReceiveResendFirstUnconfirmed()
     {
-        if (CurrentState.Unconfirmed.IsEmpty)
+        if (CurrentState.Unconfirmed.Any())
         {
             _log.Debug("Resending first unconfirmed [{0}]", CurrentState.Unconfirmed.First().SeqNr);
             CurrentState.Send(CurrentState.Unconfirmed.First());

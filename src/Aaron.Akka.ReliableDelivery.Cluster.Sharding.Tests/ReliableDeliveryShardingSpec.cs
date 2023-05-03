@@ -10,6 +10,7 @@ using Akka.Configuration;
 using Akka.Event;
 using Akka.TestKit.Xunit2;
 using Akka.Util;
+using FluentAssertions;
 using Xunit.Abstractions;
 using static Aaron.Akka.ReliableDelivery.Tests.TestConsumer;
 
@@ -135,5 +136,58 @@ public class ReliableDeliveryShardingSpec : TestKit
         
         // expecting 3 end messages, one for each entity: "entity-0", "entity-1", "entity-2"
         consumerEndProbe.ReceiveN(3, TimeSpan.FromSeconds(5));
+    }
+    
+    [Fact]
+    public async Task ReliableDelivery_with_Sharding_must_illustrate_Sharding_usage_with_several_producers()
+    {
+        await JoinCluster();
+        NextId();
+
+        var consumerEndProbe = CreateTestProbe();
+        var region = await ClusterSharding.Get(Sys).StartAsync($"TestConsumer-{_idCount}", s =>
+            ShardingConsumerController.Create<Job>(c =>
+                    TestConsumer.PropsFor(DefaultConsumerDelay, 42, consumerEndProbe.Ref, c),
+                ShardingConsumerController.Settings.Create(Sys)), ClusterShardingSettings.Create(Sys), HashCodeMessageExtractor.Create(10,
+            o =>
+            {
+                if (o is ShardingEnvelope se)
+                    return se.EntityId;
+                return string.Empty;
+            }, o =>
+            {
+                if (o is ShardingEnvelope se)
+                    return se.Message;
+                return o;
+            }));
+
+        var shardingController1 =
+            Sys.ActorOf(
+                ShardingProducerController.Create<Job>($"p1-{_idCount}", region, Option<Props>.None,
+                    ShardingProducerController.Settings.Create(Sys)), $"shardingController1-{_idCount}");
+        var producer1 = Sys.ActorOf(Props.Create(() => new TestShardingProducer(shardingController1)),
+            $"p1-{_idCount}");
+        
+        var shardingController2 =
+            Sys.ActorOf(
+                ShardingProducerController.Create<Job>($"p2-{_idCount}", region, Option<Props>.None,
+                    ShardingProducerController.Settings.Create(Sys)), $"shardingController2-{_idCount}");
+        var producer2 = Sys.ActorOf(Props.Create(() => new TestShardingProducer(shardingController2)),
+            $"p2-{_idCount}");
+        
+        // expecting 3 end messages, one for each entity: "entity-0", "entity-1", "entity-2"
+        var endMessages = consumerEndProbe.ReceiveN(3, TimeSpan.FromSeconds(5));
+
+        var producerIds = endMessages.Cast<Collected>().SelectMany(c => c.ProducerIds).ToList();
+            producerIds
+            .Should().BeEquivalentTo(new[]
+            {
+                $"p1-{_idCount}-entity-0",
+                $"p1-{_idCount}-entity-1",
+                $"p1-{_idCount}-entity-2",
+                $"p2-{_idCount}-entity-0",
+                $"p2-{_idCount}-entity-1",
+                $"p2-{_idCount}-entity-2"
+            });
     }
 }
