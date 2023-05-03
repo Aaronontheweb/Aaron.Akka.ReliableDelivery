@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using Aaron.Akka.ReliableDelivery;
 using Aaron.Akka.ReliableDelivery.Cluster.Sharding;
 using Aaron.Akka.ReliableDelivery.Cluster.Sharding.Internal;
 using Aaron.Akka.ReliableDelivery.Internal;
@@ -248,5 +250,88 @@ public class ReliableDeliveryShardingSpec : TestKit
                 replyProbe.Ref));
         
         await consumerEndProbe.ExpectMsgAsync<Collected>(); // entity-1 received 3 messages
+    }
+
+    [Fact]
+    public async Task ReliableDelivery_with_Sharding_must_include_demand_information_in_RequestNext()
+    {
+        await JoinCluster();
+        
+        NextId();
+        var shardingProbe = CreateTestProbe();
+        var producerController =
+            Sys.ActorOf(
+                ShardingProducerController.Create<Job>(ProducerId, shardingProbe.Ref, Option<Props>.None,
+                    ShardingProducerController.Settings.Create(Sys)), $"shardingController-{_idCount}");
+        var producerProbe = CreateTestProbe();
+        producerController.Tell(new ShardingProducerController.Start<Job>(producerProbe.Ref));
+
+        var next1 = await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+        next1.EntitiesWithDemand.IsEmpty.Should().BeTrue();
+        next1.BufferedForEntitiesWithoutDemand.Should().BeEquivalentTo(ImmutableDictionary<string, int>.Empty);
+        
+        next1.SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-1")));
+        // for the first message, no RequestNext until initial roundtrip
+        await producerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        
+        var seq1 = (ConsumerController.SequencedMessage<Job>)(await shardingProbe.ExpectMsgAsync<ShardingEnvelope>()).Message;
+        seq1.Message.Message.Should().BeEquivalentTo(new Job("msg-1"));
+        seq1.ProducerController.Tell(new ProducerController.Request(confirmedSeqNo:0L, requestUpToSeqNo:5L, true, false));
+        
+        var next2 = await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+        next2.EntitiesWithDemand.Should().BeEquivalentTo(new[] {"entity-1"});
+        next2.BufferedForEntitiesWithoutDemand.Should().BeEquivalentTo(ImmutableDictionary<string, int>.Empty);
+        
+        next2.SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-2")));
+        var next3 = await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+        // could be sent immediately since had demand, and Request(requestUpToSeqNr-5)
+        next3.EntitiesWithDemand.Should().BeEquivalentTo(new[] {"entity-1"});
+        next3.BufferedForEntitiesWithoutDemand.Should().BeEquivalentTo(ImmutableDictionary<string, int>.Empty);
+        
+        next3.SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-3")));
+        var next4 = await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+        next4.EntitiesWithDemand.Should().BeEquivalentTo(new[] {"entity-1"});
+        next4.BufferedForEntitiesWithoutDemand.Should().BeEquivalentTo(ImmutableDictionary<string, int>.Empty);
+        
+        next4.SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-4")));
+        var next5 = await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+        next5.EntitiesWithDemand.Should().BeEquivalentTo(new[] {"entity-1"});
+        next5.BufferedForEntitiesWithoutDemand.Should().BeEquivalentTo(ImmutableDictionary<string, int>.Empty);
+        
+        next5.SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-5")));
+        // no more demand Request(requestUpToSeqNr-5)
+        await producerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        // but we can send more, which will be buffered
+        next5.SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-6")));
+        
+        var m1 = await shardingProbe.ExpectMsgAsync<ShardingEnvelope>();
+        var m2 = await shardingProbe.ExpectMsgAsync<ShardingEnvelope>();
+        var m3 = await shardingProbe.ExpectMsgAsync<ShardingEnvelope>();
+        var seq5 = (ConsumerController.SequencedMessage<Job>)(await shardingProbe.ExpectMsgAsync<ShardingEnvelope>()).Message;
+        seq5.Message.Message.Should().BeEquivalentTo(new Job("msg-5"));
+        
+        var next6 = await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+        next6.EntitiesWithDemand.IsEmpty.Should().BeTrue();
+        next6.BufferedForEntitiesWithoutDemand.Should().BeEquivalentTo(ImmutableDictionary<string, int>.Empty.Add("entity-1", 1));
+        
+        // and we can send to another entity
+        next6.SendNextTo.Tell(new ShardingEnvelope("entity-2", new Job("msg-7")));
+        await producerProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        var seq7 = (ConsumerController.SequencedMessage<Job>)(await shardingProbe.ExpectMsgAsync<ShardingEnvelope>()).Message;
+        seq7.Message.Message.Should().BeEquivalentTo(new Job("msg-7"));
+        seq7.ProducerController.Tell(new ProducerController.Request(confirmedSeqNo:0L, requestUpToSeqNo:5L, true, false));
+        
+        var next8 = await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+        next8.EntitiesWithDemand.Should().BeEquivalentTo(new[] {"entity-2"});
+        next8.BufferedForEntitiesWithoutDemand.Should().BeEquivalentTo(ImmutableDictionary<string, int>.Empty.Add("entity-1", 1));
+        
+        // when new demand the buffered messages will be sent
+        seq5.ProducerController.Tell(new ProducerController.Request(confirmedSeqNo:5L, requestUpToSeqNo:10L, true, false));
+        var seq6 = (ConsumerController.SequencedMessage<Job>)(await shardingProbe.ExpectMsgAsync<ShardingEnvelope>()).Message;
+        seq6.Message.Message.Should().BeEquivalentTo(new Job("msg-6"));
+        
+        var next9 = await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+        next9.EntitiesWithDemand.Should().BeEquivalentTo(new[] {"entity-1", "entity-2"});
+        next9.BufferedForEntitiesWithoutDemand.Should().BeEquivalentTo(ImmutableDictionary<string, int>.Empty);
     }
 }
