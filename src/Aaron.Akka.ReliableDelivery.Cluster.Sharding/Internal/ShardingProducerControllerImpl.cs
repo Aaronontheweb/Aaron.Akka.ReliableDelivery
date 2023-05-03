@@ -310,7 +310,6 @@ internal sealed class ShardingProducerController<T> : ReceiveActor, IWithStash, 
         else
         {
             _log.Debug("Creating ProducerController for entityId [{0}]", entityId);
-            // TODO: need to pass in custom send function for ProducerController in order to map SequencedMessage to ShardingEnvelope
             Action<ConsumerController.SequencedMessage<T>> customSend = s =>
             {
                 ShardRegion.Tell(new ShardingEnvelope(entityId, s));

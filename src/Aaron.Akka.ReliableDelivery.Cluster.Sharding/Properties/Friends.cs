@@ -5,8 +5,7 @@
 //  </copyright>
 // -----------------------------------------------------------------------
 
+
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("Aaron.Akka.ReliableDelivery.Tests")]
-[assembly: InternalsVisibleTo("Aaron.Akka.ReliableDelivery.Cluster.Sharding")]
 [assembly: InternalsVisibleTo("Aaron.Akka.ReliableDelivery.Cluster.Sharding.Tests")]

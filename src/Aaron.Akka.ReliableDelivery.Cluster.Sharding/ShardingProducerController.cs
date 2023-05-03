@@ -6,6 +6,7 @@
 // -----------------------------------------------------------------------
 
 using System.Collections.Immutable;
+using Aaron.Akka.ReliableDelivery.Cluster.Sharding.Internal;
 using Akka.Actor;
 using Akka.Annotations;
 using Akka.Cluster.Sharding;
@@ -33,6 +34,11 @@ using EntityId = System.String;
 [ApiMayChange]
 public static class ShardingProducerController
 {
+    public static Props Create<T>(string producerId, IActorRef shardRegion, Option<Props> durableQueue, Settings settings)
+    {
+        return Props.Create(() => new ShardingProducerController<T>(producerId, shardRegion, durableQueue, settings, null));
+    }
+    
     /// <summary>
     /// Marker interface for all commands handled by the <see cref="ShardingProducerController"/>.
     /// </summary>

@@ -66,11 +66,12 @@ public static class ShardingConsumerController
     /// <summary>
     /// Creates a new instance of <see cref="ShardingConsumerController"/> props for the given entity and type of message.
     /// </summary>
-    /// <param name="consumerProps">The <see cref="Props"/> of the underlying entity actor.</param>
+    /// <param name="consumerProps">A function that passes in the <see cref="ShardingConsumerController"/> actor reference
+    /// in exchange for the consumer's <see cref="Props"/>.</param>
     /// <param name="settings">The settings for the <see cref="ShardingConsumerController"/>.</param>
     /// <typeparam name="T">The type of message for which we will be guaranteeing delivery.</typeparam>
     /// <returns>The props used to start this entity.</returns>
-    public static Props Create<T>(Props consumerProps, Settings settings)
+    public static Props Create<T>(Func<IActorRef, Props> consumerProps, Settings settings)
     {
         return Props.Create(() => new ShardingConsumerController<T>(consumerProps, settings)).WithStashCapacity(settings.BufferSize);
     }

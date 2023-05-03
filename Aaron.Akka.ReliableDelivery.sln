@@ -21,6 +21,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aaron.Akka.ReliableDelivery.Cluster.Sharding", "src\Aaron.Akka.ReliableDelivery.Cluster.Sharding\Aaron.Akka.ReliableDelivery.Cluster.Sharding.csproj", "{AC027316-7E1B-4E97-8E7B-0CAE4F530A92}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aaron.Akka.ReliableDelivery.Cluster.Sharding.Tests", "src\Aaron.Akka.ReliableDelivery.Cluster.Sharding.Tests\Aaron.Akka.ReliableDelivery.Cluster.Sharding.Tests.csproj", "{7A24E01E-DAAF-477A-86DB-489C259CA849}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -45,6 +47,10 @@ Global
 		{AC027316-7E1B-4E97-8E7B-0CAE4F530A92}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{AC027316-7E1B-4E97-8E7B-0CAE4F530A92}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{AC027316-7E1B-4E97-8E7B-0CAE4F530A92}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7A24E01E-DAAF-477A-86DB-489C259CA849}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7A24E01E-DAAF-477A-86DB-489C259CA849}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7A24E01E-DAAF-477A-86DB-489C259CA849}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7A24E01E-DAAF-477A-86DB-489C259CA849}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
