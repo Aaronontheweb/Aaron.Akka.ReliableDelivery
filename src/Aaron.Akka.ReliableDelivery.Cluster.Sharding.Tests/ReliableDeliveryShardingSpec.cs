@@ -1,5 +1,6 @@
 using Aaron.Akka.ReliableDelivery.Cluster.Sharding;
 using Aaron.Akka.ReliableDelivery.Cluster.Sharding.Internal;
+using Aaron.Akka.ReliableDelivery.Internal;
 using Aaron.Akka.ReliableDelivery.Tests;
 using Akka.Actor;
 using Akka.Actor.Dsl;
@@ -23,7 +24,7 @@ public class ReliableDeliveryShardingSpec : TestKit
     ";
 
     public ReliableDeliveryShardingSpec(ITestOutputHelper output) : base(
-        Configuration.WithFallback(RdShardingConfig.DefaultConfig()), output: output)
+        Configuration.WithFallback(RdConfig.DefaultConfig()), output: output)
     {
     }
 
@@ -64,6 +65,8 @@ public class ReliableDeliveryShardingSpec : TestKit
                     {
                         act.Receive<ShardingProducerController.RequestNext<Job>>((next, _) =>
                             self.Tell(new RequestNext(next.SendNextTo)));
+                        
+                        act.OnPreStart = ctx => _producerController.Tell(new ShardingProducerController.Start<Job>(ctx.Self));
                     }, "sendNextAdapter");
         }
 
@@ -113,7 +116,14 @@ public class ReliableDeliveryShardingSpec : TestKit
                 ShardingConsumerController.Settings.Create(Sys)), ClusterShardingSettings.Create(Sys), HashCodeMessageExtractor.Create(10,
             o =>
             {
+                if (o is ShardingEnvelope se)
+                    return se.EntityId;
                 return string.Empty;
+            }, o =>
+            {
+                if (o is ShardingEnvelope se)
+                    return se.Message;
+                return o;
             }));
 
         var producerController =
@@ -124,9 +134,6 @@ public class ReliableDeliveryShardingSpec : TestKit
             $"producer-{_idCount}");
         
         // expecting 3 end messages, one for each entity: "entity-0", "entity-1", "entity-2"
-        await foreach (var i in consumerEndProbe.ReceiveNAsync(3, TimeSpan.FromSeconds(5)))
-        {
-            
-        }
+        consumerEndProbe.ReceiveN(3, TimeSpan.FromSeconds(5));
     }
 }
