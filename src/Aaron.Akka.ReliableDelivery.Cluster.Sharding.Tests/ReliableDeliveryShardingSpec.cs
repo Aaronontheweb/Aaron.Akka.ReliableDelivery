@@ -510,4 +510,78 @@ public class ReliableDeliveryShardingSpec : TestKit
         var delivery4b = await consumerProbes[2].ExpectMsgAsync<ConsumerController.Delivery<Job>>();
         delivery4b.Message.Should().BeEquivalentTo(new Job("msg-4"));
     }
+
+    [Fact]
+    public async Task
+        ReliableDelivery_with_Sharding_must_cleanup_unused_ProducerController()
+    {
+        await JoinCluster();
+
+        // for example if ShardingConsumerController is rebalanced, but no more messages are sent to the entity
+        NextId();
+
+        var consumerEndProbe = CreateTestProbe();
+        var region = await ClusterSharding.Get(Sys).StartAsync($"TestConsumer-{_idCount}", s =>
+                ShardingConsumerController.Create<Job>(c =>
+                        Props.Create(() => new ProbeWrapper(consumerEndProbe, c)),
+                    ShardingConsumerController.Settings.Create(Sys)), ClusterShardingSettings.Create(Sys),
+            HashCodeMessageExtractor.Create(10,
+                o =>
+                {
+                    if (o is ShardingEnvelope se)
+                        return se.EntityId;
+                    return string.Empty;
+                }, o =>
+                {
+                    if (o is ShardingEnvelope se)
+                        return se.Message;
+                    return o;
+                }));
+        
+        var shardingProducerSettings = ShardingProducerController.Settings.Create(Sys) with
+        {
+            CleanupUnusedAfter = TimeSpan.FromSeconds(1)
+        };
+        var shardingProducerController =
+            Sys.ActorOf(
+                ShardingProducerController.Create<Job>(ProducerId, region, Option<Props>.None,
+                    shardingProducerSettings), $"shardingController-{_idCount}");
+        var producerProbe = CreateTestProbe();
+        shardingProducerController.Tell(new ShardingProducerController.Start<Job>(producerProbe.Ref));
+        
+        (await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>()).SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-1")));
+        var delivery1 = await consumerEndProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery1.Message.Should().BeEquivalentTo(new Job("msg-1"));
+        delivery1.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        (await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>()).SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-2")));
+        var delivery2 = await consumerEndProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery2.Message.Should().BeEquivalentTo(new Job("msg-2"));
+        delivery2.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        (await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>()).SendNextTo.Tell(new ShardingEnvelope("entity-2", new Job("msg-3")));
+        var delivery3 = await consumerEndProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery3.Message.Should().BeEquivalentTo(new Job("msg-3"));
+        // msg-3 not Confirmed
+        
+        var next4 = await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+        next4.EntitiesWithDemand.Should().BeEquivalentTo(new[] { "entity-1", "entity-2" });
+
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        
+        next4.SendNextTo.Tell(new ShardingEnvelope("entity-2", new Job("msg-4")));
+        var next5 = await producerProbe.ExpectMsgAsync<ShardingProducerController.RequestNext<Job>>();
+        next5.EntitiesWithDemand.Should().BeEquivalentTo(new[] { "entity-2" }); // entity-1 removed
+        
+        delivery3.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        var delivery4 = await consumerEndProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery4.Message.Should().BeEquivalentTo(new Job("msg-4"));
+        delivery4.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+        
+        // send to entity-1 again
+        next5.SendNextTo.Tell(new ShardingEnvelope("entity-1", new Job("msg-5")));
+        var delivery5 = await consumerEndProbe.ExpectMsgAsync<ConsumerController.Delivery<Job>>();
+        delivery5.Message.Should().BeEquivalentTo(new Job("msg-5"));
+        delivery5.ConfirmTo.Tell(ConsumerController.Confirmed.Instance);
+    }
 }
